@@ -1,0 +1,272 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* 牌桌呢绒 / 背景 */
+  --ink: #072018;
+  --ink-2: #0a2a1f;
+  --felt: #0b3d2e;
+  --felt-2: #14503c;
+  --felt-edge: #06241a;
+  /* 金色 */
+  --gold: #d4af37;
+  --gold-soft: #e8d9a0;
+  --gold-deep: #9c7c2a;
+  --gold-glow: rgba(212, 175, 55, 0.45);
+  /* 酒红 / 强调 */
+  --wine: #8b2635;
+  --wine-2: #b8334a;
+  /* 文字 */
+  --ivory: #f4f1e8;
+  --ivory-dim: #c9c3b0;
+  --muted: #8a9a8f;
+
+  --font-display: 'Cinzel', 'Noto Serif SC', serif;
+  --font-zh: 'Noto Serif SC', serif;
+  --font-body: 'Noto Sans SC', system-ui, sans-serif;
+  --font-card: 'Playfair Display', serif;
+
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font-body);
+  color: var(--ivory);
+  background: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  overflow-x: hidden;
+}
+
+/* 大气背景：墨绿渐变 + 暖光 + 噪点 */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  background:
+    radial-gradient(1200px 800px at 20% 0%, rgba(20, 80, 60, 0.55), transparent 60%),
+    radial-gradient(1000px 700px at 90% 100%, rgba(139, 38, 53, 0.22), transparent 55%),
+    radial-gradient(900px 600px at 50% 50%, rgba(212, 175, 55, 0.08), transparent 60%),
+    linear-gradient(160deg, #062018 0%, #0a2a1f 45%, #051a13 100%);
+}
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0.5;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
+}
+
+::selection {
+  background: var(--gold);
+  color: var(--ink);
+}
+
+/* 滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(var(--gold-deep), var(--felt-2));
+  border-radius: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ===== 可复用组件类 ===== */
+@layer components {
+  .glass {
+    background: linear-gradient(160deg, rgba(20, 80, 60, 0.32), rgba(7, 32, 24, 0.55));
+    backdrop-filter: blur(14px) saturate(120%);
+    -webkit-backdrop-filter: blur(14px) saturate(120%);
+    border: 1px solid rgba(212, 175, 55, 0.28);
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(244, 241, 232, 0.06);
+  }
+
+  .gold-border {
+    border: 1px solid transparent;
+    background:
+      linear-gradient(var(--ink-2), var(--ink-2)) padding-box,
+      linear-gradient(135deg, var(--gold), var(--gold-deep) 40%, var(--gold-soft) 70%, var(--gold-deep)) border-box;
+  }
+
+  .btn {
+    font-family: var(--font-body);
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    border-radius: 12px;
+    padding: 0.7rem 1.4rem;
+    cursor: pointer;
+    transition: transform 0.12s ease, box-shadow 0.2s ease, filter 0.2s ease;
+    user-select: none;
+    border: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+  }
+  .btn:active {
+    transform: translateY(1px);
+  }
+  .btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    filter: grayscale(0.4);
+  }
+
+  .btn-gold {
+    color: var(--ink);
+    background: linear-gradient(135deg, var(--gold-soft), var(--gold) 45%, var(--gold-deep));
+    box-shadow: 0 8px 22px rgba(212, 175, 55, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.5);
+    font-weight: 600;
+  }
+  .btn-gold:hover:not(:disabled) {
+    filter: brightness(1.08);
+    box-shadow: 0 10px 28px rgba(212, 175, 55, 0.45);
+  }
+
+  .btn-ghost {
+    color: var(--ivory);
+    background: linear-gradient(160deg, rgba(20, 80, 60, 0.5), rgba(7, 32, 24, 0.6));
+    border: 1px solid rgba(212, 175, 55, 0.4);
+  }
+  .btn-ghost:hover:not(:disabled) {
+    border-color: var(--gold);
+    box-shadow: 0 0 16px var(--gold-glow);
+  }
+
+  .btn-wine {
+    color: var(--ivory);
+    background: linear-gradient(135deg, var(--wine-2), var(--wine));
+    box-shadow: 0 8px 22px rgba(139, 38, 53, 0.35);
+  }
+  .btn-wine:hover:not(:disabled) {
+    filter: brightness(1.1);
+  }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 0.78rem;
+    padding: 0.2rem 0.6rem;
+    border-radius: 999px;
+    background: rgba(7, 32, 24, 0.6);
+    border: 1px solid rgba(212, 175, 55, 0.35);
+    color: var(--gold-soft);
+  }
+
+  .title-display {
+    font-family: var(--font-display);
+    letter-spacing: 0.12em;
+  }
+  .title-zh {
+    font-family: var(--font-zh);
+    font-weight: 900;
+  }
+}
+
+/* ===== 动效 ===== */
+@keyframes floatUp {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes dealIn {
+  from {
+    opacity: 0;
+    transform: translateY(-120px) rotate(-12deg) scale(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) rotate(0) scale(1);
+  }
+}
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+@keyframes pulseGold {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 var(--gold-glow);
+  }
+  50% {
+    box-shadow: 0 0 0 8px transparent;
+  }
+}
+@keyframes coinFall {
+  0% {
+    transform: translateY(-20vh) rotate(0);
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(110vh) rotate(540deg);
+    opacity: 0;
+  }
+}
+@keyframes glowText {
+  0%,
+  100% {
+    text-shadow: 0 0 8px var(--gold-glow);
+  }
+  50% {
+    text-shadow: 0 0 22px var(--gold-glow), 0 0 40px var(--gold-glow);
+  }
+}
+
+.anim-rise {
+  animation: floatUp 0.5s ease both;
+}
+.anim-deal {
+  animation: dealIn 0.45s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+}
+.anim-pulse {
+  animation: pulseGold 1.6s ease-in-out infinite;
+}
+.text-glow {
+  animation: glowText 2.4s ease-in-out infinite;
+}
+
+/* 金色描边文字 */
+.gold-text {
+  background: linear-gradient(135deg, var(--gold-soft), var(--gold) 50%, var(--gold-deep));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+input,
+textarea {
+  font-family: var(--font-body);
+}
