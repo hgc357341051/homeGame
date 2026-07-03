@@ -1,0 +1,223 @@
+<script setup lang="ts">
+import { computed } from 'vue'
+import type { SeatView } from '@/types'
+
+const props = defineProps<{
+  seat: SeatView
+  isCurrent: boolean
+  isMe: boolean
+  position: 'top' | 'left' | 'right' | 'bottom'
+  compact?: boolean
+}>()
+
+const statusBadge = computed(() => {
+  if (props.seat.isFolded) return { text: '弃牌', cls: 'folded' }
+  if (props.seat.isLandlord) return { text: '地主', cls: 'landlord' }
+  if (props.seat.isDealer) return { text: '庄家', cls: 'dealer' }
+  return null
+})
+
+const empty = computed(() => !props.seat.playerId)
+</script>
+
+<template>
+  <div class="seat" :class="[position, { current: isCurrent, me: isMe, empty }]">
+    <div class="avatar-wrap">
+      <div class="avatar" v-if="!empty">{{ seat.avatar }}</div>
+      <div class="avatar placeholder" v-else>+</div>
+      <div class="online-dot" :class="{ on: seat.online }" v-if="!empty" />
+    </div>
+
+    <div class="info" v-if="!empty">
+      <div class="name-line">
+        <span class="name">{{ seat.name }}</span>
+        <span class="owner-tag" v-if="seat.isOwner">房主</span>
+        <span class="badge" :class="statusBadge.cls" v-if="statusBadge">{{ statusBadge.text }}</span>
+        <span class="badge looked" v-if="seat.isLooked && !seat.isFolded">看牌</span>
+      </div>
+      <div class="meta">
+        <span class="chip">🪙 {{ seat.chips }}</span>
+        <span class="card-cnt" v-if="seat.cardCount > 0">🂠 {{ seat.cardCount }}</span>
+        <span class="bet" v-if="seat.currentBet">注 {{ seat.currentBet }}</span>
+        <span class="ready" v-if="seat.ready">✓ 已准备</span>
+      </div>
+      <div class="niu" v-if="seat.hasNiu">牛 {{ seat.niuValue === 0 ? '没' : (seat.niuValue === 10 ? '牛' : seat.niuValue) }}</div>
+    </div>
+    <div class="info empty-info" v-else>
+      <span class="empty-text">空位</span>
+    </div>
+
+    <div class="turn-ring" v-if="isCurrent" />
+  </div>
+</template>
+
+<style scoped>
+.seat {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 0.7rem;
+  border-radius: 14px;
+  min-width: 150px;
+  background: linear-gradient(160deg, rgba(20, 80, 60, 0.32), rgba(7, 32, 24, 0.5));
+  border: 1px solid rgba(212, 175, 55, 0.22);
+  transition: all 0.25s ease;
+}
+.seat.me {
+  border-color: rgba(212, 175, 55, 0.6);
+}
+.seat.current {
+  border-color: var(--gold);
+  box-shadow: 0 0 0 1px var(--gold), 0 0 24px var(--gold-glow);
+}
+.seat.empty {
+  opacity: 0.55;
+  border-style: dashed;
+}
+.avatar-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+.avatar {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  background: radial-gradient(circle at 30% 30%, var(--felt-2), var(--felt));
+  border: 2px solid var(--gold-deep);
+  box-shadow: inset 0 0 8px rgba(0, 0, 0, 0.4);
+}
+.avatar.placeholder {
+  color: var(--gold-soft);
+  font-size: 22px;
+  border-style: dashed;
+}
+.online-dot {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #555;
+  border: 2px solid var(--ink);
+}
+.online-dot.on {
+  background: #4ade80;
+  box-shadow: 0 0 6px #4ade80;
+}
+.info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.18rem;
+  min-width: 0;
+}
+.name-line {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+.name {
+  font-weight: 600;
+  font-size: 0.92rem;
+  color: var(--ivory);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 90px;
+}
+.owner-tag {
+  font-size: 0.62rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 5px;
+  background: rgba(212, 175, 55, 0.2);
+  color: var(--gold-soft);
+  border: 1px solid rgba(212, 175, 55, 0.4);
+}
+.badge {
+  font-size: 0.62rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 5px;
+  font-weight: 600;
+}
+.badge.landlord {
+  background: var(--wine);
+  color: var(--ivory);
+}
+.badge.dealer {
+  background: var(--gold);
+  color: var(--ink);
+}
+.badge.folded {
+  background: #444;
+  color: var(--ivory-dim);
+}
+.badge.looked {
+  background: rgba(46, 125, 91, 0.4);
+  color: #9fe3c4;
+  border: 1px solid rgba(46, 125, 91, 0.6);
+}
+.meta {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.72rem;
+  color: var(--ivory-dim);
+  flex-wrap: wrap;
+}
+.card-cnt {
+  color: var(--gold-soft);
+}
+.bet {
+  color: #ffb38a;
+}
+.ready {
+  color: #4ade80;
+}
+.niu {
+  font-size: 0.7rem;
+  color: var(--gold-soft);
+  font-weight: 600;
+}
+.empty-info {
+  justify-content: center;
+}
+.empty-text {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+.turn-ring {
+  position: absolute;
+  inset: -3px;
+  border-radius: 16px;
+  border: 2px solid var(--gold);
+  pointer-events: none;
+  animation: pulseGold 1.6s ease-in-out infinite;
+}
+
+@media (max-width: 768px) {
+  .seat {
+    min-width: auto;
+    padding: 0.4rem 0.45rem;
+    gap: 0.4rem;
+  }
+  .avatar {
+    width: 34px;
+    height: 34px;
+    font-size: 19px;
+  }
+  .name {
+    max-width: 60px;
+    font-size: 0.8rem;
+  }
+  .meta {
+    font-size: 0.64rem;
+    gap: 0.3rem;
+  }
+}
+</style>
