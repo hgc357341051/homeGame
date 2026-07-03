@@ -470,6 +470,9 @@ func (e *zjhEngine) settleByFold(r *Room) []Event {
 	for _, s := range r.Seats {
 		s.Ready = false
 		s.CurrentBet = 0
+		if s.Chips < 0 {
+			s.Chips = 0 // 筹码下界封 0
+		}
 	}
 	return evs
 }

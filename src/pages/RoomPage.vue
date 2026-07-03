@@ -377,11 +377,7 @@ onUnmounted(() => {
 
     <!-- 结算 -->
     <SettleModal />
-
-    <!-- 全局错误提示 -->
-    <transition name="fade">
-      <div v-if="store.errorToast" class="error-toast">{{ store.errorToast }}</div>
-    </transition>
+    <!-- 错误提示统一由 App.vue 全局渲染，避免重复 -->
   </div>
 </template>
 
@@ -832,21 +828,6 @@ onUnmounted(() => {
   gap: 6px;
   justify-content: center;
   flex-wrap: wrap;
-}
-
-/* ===== 错误提示 ===== */
-.error-toast {
-  position: fixed;
-  top: 70px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 300;
-  background: linear-gradient(135deg, var(--wine-2), var(--wine));
-  color: var(--ivory);
-  padding: 0.6rem 1.2rem;
-  border-radius: 10px;
-  font-size: 0.88rem;
-  box-shadow: 0 10px 30px rgba(139, 38, 53, 0.4);
 }
 
 /* ===== 过渡 ===== */

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log"
 	"math/rand"
 	"strings"
 	"sync"
@@ -15,6 +16,78 @@ type RoomManager struct {
 
 func newRoomManager() *RoomManager {
 	return &RoomManager{rooms: make(map[string]*Room)}
+}
+
+// roomIdleTimeout 房间空置多久后自动删除（无在座玩家也无旁观者）
+const roomIdleTimeout = 30 * time.Minute
+
+// reaper 周期性清理：空房间回收 + 超时掉线座位推进/释放（即使没人广播也能解死锁）
+func (rm *RoomManager) reaper() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		type pendingAction struct {
+			room      *Room
+			sysMsg    string
+			evs       []Event
+			needBcast bool
+		}
+		var actions []pendingAction
+		toDelete := []string{}
+		rm.mu.Lock()
+		now := time.Now()
+		for code, room := range rm.rooms {
+			room.mu.Lock()
+			pa := pendingAction{room: room}
+			// 1) 释放已超时的掉线座位，并触发引擎推进/结算
+			if room.Phase == "playing" {
+				for _, s := range room.Seats {
+					if s.isOffline() && time.Since(s.DisconnectedAt) > offlineTimeout {
+						name := s.Name
+						seatIdx := s.Index
+						room.standLocked(seatIdx)
+						evs := room.Engine.OnSeatVacated(room, seatIdx)
+						pa.sysMsg = name + " 掉线超时，座位已释放"
+						pa.evs = evs
+						pa.needBcast = true
+						break // 一轮处理一个座位即可，下一轮再处理下一个
+					}
+				}
+			}
+			// 2) 判定房间是否空闲（无在座、无旁观）
+			hasPlayer := false
+			for _, s := range room.Seats {
+				if s.PlayerID != "" {
+					hasPlayer = true
+					break
+				}
+			}
+			empty := !hasPlayer && len(room.Spectators) == 0
+			room.mu.Unlock()
+			if empty && now.Sub(room.createdAt) > roomIdleTimeout {
+				toDelete = append(toDelete, code)
+				continue
+			}
+			if pa.needBcast {
+				actions = append(actions, pa)
+			}
+		}
+		for _, code := range toDelete {
+			delete(rm.rooms, code)
+		}
+		rm.mu.Unlock()
+		// 解锁后发送系统消息、事件、广播状态
+		for _, pa := range actions {
+			if pa.sysMsg != "" {
+				pa.room.systemChat(pa.sysMsg)
+			}
+			pa.room.emitEvents(pa.evs)
+			pa.room.broadcastState()
+		}
+		for _, code := range toDelete {
+			log.Printf("房间 %s 已空置超时，已回收", code)
+		}
+	}
 }
 
 const codeAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -124,6 +197,9 @@ func (rm *RoomManager) handleAction(c *Client, action string, data ActionData) {
 	c.room.applyAction(c, action, data)
 }
 
+// maxSpectators 每个房间旁观者上限，防止旁观连接耗尽资源
+const maxSpectators = 20
+
 func (rm *RoomManager) createRoom(c *Client, data ActionData) {
 	game, _ := data["game"].(string)
 	if game != "ddz" && game != "zjh" && game != "nn" {
@@ -138,8 +214,10 @@ func (rm *RoomManager) createRoom(c *Client, data ActionData) {
 	rm.rooms[code] = room
 	rm.mu.Unlock()
 	c.room = room
-	// 房主自动作为旁观者，需手动入座
+	// 房主自动作为旁观者，需手动入座（持房间锁 append，避免与并发 joinRoom 竞争）
+	room.mu.Lock()
 	room.Spectators = append(room.Spectators, c)
+	room.mu.Unlock()
 	c.sendMsg(Message{Type: "roomCreated", Data: ActionData{"code": code}})
 	room.broadcastState()
 }
@@ -195,6 +273,11 @@ func (rm *RoomManager) joinRoom(c *Client, data ActionData) {
 		}
 	}
 	if !alreadySpectator {
+		if len(room.Spectators) >= maxSpectators {
+			room.mu.Unlock()
+			c.emitError("房间旁观人数已满")
+			return
+		}
 		c.room = room
 		room.Spectators = append(room.Spectators, c)
 	}

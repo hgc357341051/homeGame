@@ -21,10 +21,10 @@ const canStart = computed(() => readyCount.value >= (room.value?.minPlayers ?? 9
 
 // 蒙牌模式开关（仅炸金花，房主在等待阶段设置）
 const blindMode = ref(false)
-// 从房间状态同步蒙牌模式
+// 从房间状态同步蒙牌模式（服务端为权威源，避免本地与远端不一致）
 watch(() => room.value?.blindMode, (v) => { blindMode.value = !!v }, { immediate: true })
+// v-model 已自动同步 blindMode；@change 仅负责把新值发送给服务端，不再重复翻转
 function toggleBlindMode() {
-  blindMode.value = !blindMode.value
   store.send('setBlindMode', { blindMode: blindMode.value })
 }
 

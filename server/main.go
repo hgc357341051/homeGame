@@ -55,6 +55,8 @@ func main() {
 
 	hub := newHub()
 	go hub.run()
+	// 启动房间清理与掉线座位推进的后台任务
+	go hub.rm.reaper()
 
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		serveWS(hub, w, r)

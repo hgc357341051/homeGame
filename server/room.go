@@ -252,13 +252,14 @@ func (r *Room) handleDisconnect(c *Client) {
 			break
 		}
 	}
-	// 座位：对局中仅标记离线保留座位可重连（记录掉线时间）；等待阶段直接释放
+	// 座位：对局中仅标记离线保留座位可重连（记录掉线时间）；其余阶段直接释放
 	for _, s := range r.Seats {
 		if s.Client == c {
 			if r.Phase == "playing" {
 				s.Client = nil
 				s.DisconnectedAt = time.Now()
 			} else {
+				// waiting / settled 阶段直接释放座位，避免离线座位残留阻塞新玩家入座
 				r.standLocked(s.Index)
 			}
 			found = true
@@ -479,6 +480,7 @@ func (r *Room) standLocked(seat int) {
 	s.LookedIndices = nil
 	s.IsRevealed = false
 	s.DisconnectedAt = time.Time{}
+	s.Chips = startChips // 重置筹码，避免新入座者继承前任筹码
 }
 
 func (r *Room) handleSit(c *Client, data ActionData) {
@@ -553,33 +555,44 @@ func (r *Room) systemChat(text string) {
 
 func (r *Room) handleChat(c *Client, data ActionData) {
 	text, _ := data["text"].(string)
-	if text == "" {
+	text = strings.TrimSpace(text)
+	// 限制单条聊天长度，避免刷屏
+	if text == "" || len([]rune(text)) > 200 {
+		c.emitError("聊天内容无效（1-200字）")
 		return
 	}
+	// 在锁内读取名字，避免与 standLocked/handleRename 竞争
+	r.mu.Lock()
 	name := c.name
 	if seat := r.findSeat(c.playerID); seat >= 0 {
 		name = r.Seats[seat].Name
 	}
+	r.mu.Unlock()
 	r.broadcast(Event{Type: "chat", Data: ActionData{"player": name, "text": text}, Target: -1})
 }
 
 // handleSetBlindMode 房主设置炸金花蒙牌模式（仅等待阶段）
 func (r *Room) handleSetBlindMode(c *Client, data ActionData) {
+	r.mu.Lock()
 	if c.playerID != r.HostID {
+		r.mu.Unlock()
 		c.emitError("仅房主可设置")
 		return
 	}
 	if r.Phase != "waiting" {
+		r.mu.Unlock()
 		c.emitError("仅等待阶段可设置")
 		return
 	}
 	if r.Game != "zjh" {
+		r.mu.Unlock()
 		c.emitError("仅炸金花支持蒙牌模式")
 		return
 	}
 	if v, ok := data["blindMode"].(bool); ok {
 		r.BlindMode = v
 	}
+	r.mu.Unlock()
 	r.broadcastState()
 }
 

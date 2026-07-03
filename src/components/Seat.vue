@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch, onUnmounted } from 'vue'
 import type { SeatView } from '@/types'
 import { useGameStore } from '@/stores/game'
 
@@ -21,10 +21,44 @@ const statusBadge = computed(() => {
 })
 
 const empty = computed(() => !props.seat.playerId)
+
+// 本地掉线倒计时：服务端只在 broadcastState 时下发 offlineLeft，
+// 客户端每秒自减以保证 UI 连续刷新（避免在无广播时卡住）
+const localOfflineLeft = ref(0)
+let offlineTimer: ReturnType<typeof setInterval> | null = null
+watch(
+  () => props.seat.offlineLeft,
+  (v) => {
+    localOfflineLeft.value = v || 0
+  },
+  { immediate: true },
+)
+watch(
+  localOfflineLeft,
+  (v) => {
+    if (v > 0 && !offlineTimer) {
+      offlineTimer = setInterval(() => {
+        if (localOfflineLeft.value > 0) {
+          localOfflineLeft.value--
+        } else if (offlineTimer) {
+          clearInterval(offlineTimer)
+          offlineTimer = null
+        }
+      }, 1000)
+    } else if (v <= 0 && offlineTimer) {
+      clearInterval(offlineTimer)
+      offlineTimer = null
+    }
+  },
+  { immediate: true },
+)
+onUnmounted(() => {
+  if (offlineTimer) clearInterval(offlineTimer)
+})
 const offlineLeftText = computed(() => {
-  if (!props.seat.offline || !props.seat.offlineLeft) return ''
-  const m = Math.floor(props.seat.offlineLeft / 60)
-  const s = props.seat.offlineLeft % 60
+  if (!props.seat.offline || localOfflineLeft.value <= 0) return ''
+  const m = Math.floor(localOfflineLeft.value / 60)
+  const s = localOfflineLeft.value % 60
   return `${m}:${s.toString().padStart(2, '0')}`
 })
 

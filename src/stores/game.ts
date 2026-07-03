@@ -247,18 +247,27 @@ export const useGameStore = defineStore('game', () => {
     settle.value = null
   }
 
-  function leaveRoom() {
-    send('leave', {})
+  // 清理房间相关本地状态（停心跳/重连、清 joinedCode 防止重连拉回、清空状态）
+  // 不发送 leave，不跳转路由，供路由守卫与 leaveRoom 复用
+  function cleanupRoom() {
     joinedCode = null
     stopHeartbeat()
     reconnectAttempts = MAX_RECONNECT // 阻止自动重连
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+    reconnecting.value = false
     room.value = null
     myHand.value = []
     chat.value = []
     turn.value = null
     reveal.value = null
     settle.value = null
+    phaseMsg.value = ''
+    log.value = []
+  }
+
+  function leaveRoom() {
+    send('leave', {})
+    cleanupRoom()
     router.push('/')
   }
 
@@ -290,6 +299,7 @@ export const useGameStore = defineStore('game', () => {
     joinRoom,
     clearReveal,
     clearSettle,
+    cleanupRoom,
     leaveRoom,
     seatName,
     kickSeat,

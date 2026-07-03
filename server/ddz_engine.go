@@ -27,9 +27,20 @@ func (e *ddzEngine) PlayerHand(s *Seat) []Card {
 	return s.Hand
 }
 
-// OnSeatVacated 斗地主不支持中途腾空座位（3人固定），这里不处理
+// OnSeatVacated 斗地主为固定 3 人游戏，座位被腾空后无法继续；直接中止本局回到等待阶段
 func (e *ddzEngine) OnSeatVacated(r *Room, seat int) []Event {
-	return nil
+	if e.phase != "playing" && e.phase != "callLandlord" {
+		return nil
+	}
+	e.phase = "settled"
+	r.Phase = "waiting"
+	for _, s := range r.Seats {
+		s.Ready = false
+		s.Hand = nil
+	}
+	return []Event{Event{Type: "phase", Data: ActionData{
+		"phase": "settled", "message": "玩家离场，本局中止",
+	}, Target: -1}}
 }
 
 func (e *ddzEngine) reset() {
@@ -250,6 +261,9 @@ func (e *ddzEngine) settle(r *Room, winnerSeat int) []Event {
 	// 结束后重置准备状态以便再来一局
 	for _, s := range r.Seats {
 		s.Ready = false
+		if s.Chips < 0 {
+			s.Chips = 0 // 筹码下界封 0
+		}
 	}
 	return evs
 }
