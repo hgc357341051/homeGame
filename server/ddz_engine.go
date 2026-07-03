@@ -27,6 +27,11 @@ func (e *ddzEngine) PlayerHand(s *Seat) []Card {
 	return s.Hand
 }
 
+// OnSeatVacated 斗地主不支持中途腾空座位（3人固定），这里不处理
+func (e *ddzEngine) OnSeatVacated(r *Room, seat int) []Event {
+	return nil
+}
+
 func (e *ddzEngine) reset() {
 	*e = ddzEngine{baseScore: 2, multiplier: 1}
 }

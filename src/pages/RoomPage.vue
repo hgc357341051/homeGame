@@ -124,7 +124,7 @@ watch(
 async function joinRoom() {
   try {
     await store.connect()
-    store.send('joinRoom', { code: props.code.toUpperCase() })
+    store.joinRoom(props.code.toUpperCase())
   } catch {
     /* 错误已由 store 提示 */
   }
@@ -145,6 +145,13 @@ function leave() {
 }
 
 function clickSeat(seat: SeatView) {
+  // 房主点击掉线座位：踢人释放
+  if (seat.offline && store.isOwner) {
+    if (window.confirm(`踢出掉线的 ${seat.name}？`)) {
+      store.kickSeat(seat.seat)
+    }
+    return
+  }
   if (phase.value !== 'waiting') return
   if (!seat.playerId) {
     store.send('sit', { seat: seat.seat })
@@ -185,8 +192,8 @@ onUnmounted(() => {
       </div>
       <div class="header-actions">
         <div class="conn-status">
-          <span class="dot" :class="{ on: store.connected }" />
-          <span class="conn-text">{{ store.connected ? '在线' : '连接中…' }}</span>
+          <span class="dot" :class="{ on: store.connected, reconnect: store.reconnecting }" />
+          <span class="conn-text">{{ store.reconnecting ? '重连中…' : (store.connected ? '在线' : '连接中…') }}</span>
         </div>
         <button class="btn btn-ghost leave-btn" @click="leave">离开房间</button>
         <button class="btn btn-ghost chat-fab" @click="chatOpen = !chatOpen" aria-label="消息">💬</button>
@@ -290,7 +297,7 @@ onUnmounted(() => {
                 v-for="s in seats"
                 :key="s.seat"
                 class="seat-slot"
-                :class="{ clickable: phase === 'waiting' && (!s.playerId || s.seat === mySeat) }"
+                :class="{ clickable: (phase === 'waiting' && (!s.playerId || s.seat === mySeat)) || (s.offline && store.isOwner) }"
                 :style="seatStyle(s.seat)"
                 @click="clickSeat(s)"
               >
@@ -471,6 +478,11 @@ onUnmounted(() => {
 .dot.on {
   background: #4ade80;
   box-shadow: 0 0 8px #4ade80;
+}
+.dot.reconnect {
+  background: #fbbf24;
+  box-shadow: 0 0 8px #fbbf24;
+  animation: pulseGold 1s ease-in-out infinite;
 }
 .leave-btn {
   padding: 0.45rem 0.9rem;

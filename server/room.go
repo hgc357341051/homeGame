@@ -9,6 +9,9 @@ import (
 
 const startChips = 1000
 
+// offlineTimeout 掉线后座位保留时长，超时后释放供他人入座
+const offlineTimeout = 3 * time.Minute
+
 // Seat 表示房间中的一个座位。Hand 仅存在于服务端内存。
 type Seat struct {
 	Index         int
@@ -29,6 +32,24 @@ type Seat struct {
 	SettledDelta  int
 	LookedIndices []bool // 蒙牌模式下已查看的牌索引
 	IsRevealed    bool   // 蒙牌模式下是否已开牌(向所有人展示)
+	DisconnectedAt time.Time // 掉线时间（对局中保留座位，超时释放）
+}
+
+// isOffline 掉线但座位保留中（对局内）
+func (s *Seat) isOffline() bool {
+	return s.PlayerID != "" && s.Client == nil && !s.DisconnectedAt.IsZero()
+}
+
+// offlineLeftSec 掉线座位剩余秒数
+func (s *Seat) offlineLeftSec() int {
+	if !s.isOffline() {
+		return 0
+	}
+	left := offlineTimeout - time.Since(s.DisconnectedAt)
+	if left < 0 {
+		return 0
+	}
+	return int(left.Seconds())
 }
 
 func (s *Seat) occupied() bool { return s.Client != nil }
@@ -44,6 +65,8 @@ type GameEngine interface {
 	PublicArea(r *Room) PublicAreaView
 	// PlayerHand 返回该玩家当前可看到的手牌（蒙牌模式下仅为已查看的牌）
 	PlayerHand(s *Seat) []Card
+	// OnSeatVacated 当座位被腾空（踢人/超时）时调用，引擎推进回合或结算
+	OnSeatVacated(r *Room, seat int) []Event
 }
 
 // Room 一个游戏房间
@@ -129,6 +152,8 @@ func (r *Room) broadcast(ev Event) {
 func (r *Room) broadcastState() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// 懒清理：释放已超时的掉线座位
+	r.cleanupOfflineSeatsLocked()
 	// 旁观者与在座玩家都收到公开状态
 	for _, s := range r.Seats {
 		if !s.occupied() {
@@ -188,6 +213,11 @@ func (r *Room) viewFor(c *Client) RoomStateView {
 			if s.PlayerID == r.HostID {
 				sv.IsOwner = true
 			}
+			// 掉线保留座位信息
+			if s.isOffline() {
+				sv.Offline = true
+				sv.OfflineLeft = s.offlineLeftSec()
+			}
 		}
 		seats = append(seats, sv)
 	}
@@ -213,6 +243,60 @@ func (r *Room) viewFor(c *Client) RoomStateView {
 func (r *Room) handleDisconnect(c *Client) {
 	r.mu.Lock()
 	leaveName := c.name
+	found := false
+	// 旁观者移除
+	for i, sp := range r.Spectators {
+		if sp == c {
+			r.Spectators = append(r.Spectators[:i], r.Spectators[i+1:]...)
+			found = true
+			break
+		}
+	}
+	// 座位：对局中仅标记离线保留座位可重连（记录掉线时间）；等待阶段直接释放
+	for _, s := range r.Seats {
+		if s.Client == c {
+			if r.Phase == "playing" {
+				s.Client = nil
+				s.DisconnectedAt = time.Now()
+			} else {
+				r.standLocked(s.Index)
+			}
+			found = true
+			break
+		}
+	}
+	r.broadcastStateAsync()
+	r.mu.Unlock()
+	// 仅当该连接确实在房间内时才提示（避免僵尸连接替换后误报）
+	if found && leaveName != "" {
+		if r.Phase == "playing" {
+			r.systemChat(leaveName + " 掉线了（座位保留 3 分钟）")
+		} else {
+			r.systemChat(leaveName + " 离开了房间")
+		}
+	}
+}
+
+// cleanupOfflineSeatsLocked 释放已超时的掉线座位（懒清理，调用方需持有 r.mu）
+func (r *Room) cleanupOfflineSeatsLocked() {
+	for _, s := range r.Seats {
+		if s.isOffline() && time.Since(s.DisconnectedAt) > offlineTimeout {
+			name := s.Name
+			seatIdx := s.Index
+			r.standLocked(seatIdx)
+			r.systemChat(name + " 掉线超时，座位已释放")
+			// 对局中腾空座位：通知引擎推进回合或结算
+			if r.Phase == "playing" {
+				r.emitEvents(r.Engine.OnSeatVacated(r, seatIdx))
+			}
+		}
+	}
+}
+
+// handleLeave 主动离开：永久移除（不等同于掉线，不保留座位）
+func (r *Room) handleLeave(c *Client) {
+	r.mu.Lock()
+	leaveName := c.name
 	// 旁观者移除
 	for i, sp := range r.Spectators {
 		if sp == c {
@@ -220,22 +304,60 @@ func (r *Room) handleDisconnect(c *Client) {
 			break
 		}
 	}
-	// 座位：对局中仅标记离线保留座位可重连；等待阶段直接释放
+	// 座位：无论阶段直接释放（主动离开=永久移除）
+	vacatedSeat := -1
 	for _, s := range r.Seats {
 		if s.Client == c {
-			if r.Phase == "playing" {
-				s.Client = nil
-			} else {
-				r.standLocked(s.Index)
-			}
+			vacatedSeat = s.Index
+			r.standLocked(s.Index)
 			break
 		}
 	}
-	r.broadcastStateAsync()
+	c.room = nil
+	var evs []Event
+	if vacatedSeat >= 0 && r.Phase == "playing" {
+		evs = r.Engine.OnSeatVacated(r, vacatedSeat)
+	}
 	r.mu.Unlock()
 	if leaveName != "" {
 		r.systemChat(leaveName + " 离开了房间")
 	}
+	r.emitEvents(evs)
+	r.broadcastState()
+}
+
+// handleKick 房主踢出掉线保留中的座位
+func (r *Room) handleKick(c *Client, data ActionData) {
+	if c.playerID != r.HostID {
+		c.emitError("仅房主可踢人")
+		return
+	}
+	seatNum := -1
+	if v, ok := data["seat"].(float64); ok {
+		seatNum = int(v)
+	}
+	r.mu.Lock()
+	if seatNum < 0 || seatNum >= len(r.Seats) {
+		r.mu.Unlock()
+		c.emitError("座位无效")
+		return
+	}
+	s := r.Seats[seatNum]
+	if !s.isOffline() {
+		r.mu.Unlock()
+		c.emitError("该座位未掉线")
+		return
+	}
+	kickName := s.Name
+	r.standLocked(seatNum)
+	var evs []Event
+	if r.Phase == "playing" {
+		evs = r.Engine.OnSeatVacated(r, seatNum)
+	}
+	r.mu.Unlock()
+	r.systemChat("房主踢出了掉线的 " + kickName)
+	r.emitEvents(evs)
+	r.broadcastState()
 }
 
 // 由于 handleDisconnect 已持有锁，这里用无锁版本广播
@@ -289,6 +411,14 @@ func (r *Room) applyAction(c *Client, action string, data ActionData) {
 	case "setBlindMode":
 		r.mu.Unlock()
 		r.handleSetBlindMode(c, data)
+		return
+	case "leave":
+		r.mu.Unlock()
+		r.handleLeave(c)
+		return
+	case "kick":
+		r.mu.Unlock()
+		r.handleKick(c, data)
 		return
 	}
 
@@ -348,23 +478,38 @@ func (r *Room) standLocked(seat int) {
 	s.SettledDelta = 0
 	s.LookedIndices = nil
 	s.IsRevealed = false
+	s.DisconnectedAt = time.Time{}
 }
 
 func (r *Room) handleSit(c *Client, data ActionData) {
 	r.mu.Lock()
-	if r.Phase == "playing" {
-		r.mu.Unlock()
-		c.emitError("对局进行中，无法入座")
-		return
-	}
-	// 已在座则换座
+	// 已在座则换座（仅等待阶段）
 	cur := r.findSeat(c.playerID)
-	if cur >= 0 {
+	if cur >= 0 && r.Phase != "playing" {
 		r.standLocked(cur)
 	}
 	seat := -1
 	if v, ok := data["seat"].(float64); ok {
 		seat = int(v)
+	}
+	// 选定座位校验
+	if seat >= 0 && seat < len(r.Seats) {
+		target := r.Seats[seat]
+		if target.occupied() {
+			// 已有在线玩家占用
+			seat = r.firstEmptySeat()
+		} else if target.isOffline() {
+			// 掉线保留中：超时则可入座（继承手牌）；未超时仅原玩家可夺回
+			if time.Since(target.DisconnectedAt) > offlineTimeout {
+				// 超时释放，可继承手牌入座
+			} else if target.PlayerID == c.playerID {
+				// 原玩家夺回（走 tryReclaim 更合适，这里允许）
+			} else {
+				r.mu.Unlock()
+				c.emitError("该座位掉线保留中，请等待超时或房主踢人")
+				return
+			}
+		}
 	}
 	if seat < 0 || seat >= len(r.Seats) || r.Seats[seat].occupied() {
 		seat = r.firstEmptySeat()
@@ -375,9 +520,11 @@ func (r *Room) handleSit(c *Client, data ActionData) {
 		return
 	}
 	s := r.Seats[seat]
+	inheritHand := r.Phase == "playing" && len(s.Hand) > 0 && s.isOffline()
 	s.Client = c
 	s.PlayerID = c.playerID
 	s.Name = c.name
+	s.DisconnectedAt = time.Time{}
 	// 移出旁观者
 	for i, sp := range r.Spectators {
 		if sp == c {
@@ -387,8 +534,16 @@ func (r *Room) handleSit(c *Client, data ActionData) {
 	}
 	seatName := c.name
 	r.mu.Unlock()
-	r.systemChat(seatName + " 入座")
+	if inheritHand {
+		r.systemChat(seatName + " 接管了掉线座位（继承手牌）")
+	} else {
+		r.systemChat(seatName + " 入座")
+	}
 	r.broadcastState()
+	// 继承手牌时补发 deal 给新入座者
+	if inheritHand {
+		c.sendMsg(Message{Type: "deal", Data: ActionData{"cards": s.Hand}})
+	}
 }
 
 // systemChat 广播一条系统消息到聊天框
@@ -511,13 +666,29 @@ func (r *Room) handleStart(c *Client, data ActionData) {
 	r.broadcastState()
 }
 
-// handleReconnect 处理玩家重连：若该玩家原座位 Client 为空且 playerID 匹配则恢复
+// tryReclaim 处理玩家重连：若该玩家原座位 playerID 匹配则恢复（含夺回掉线座位与替换僵尸连接）
 func (r *Room) tryReclaim(c *Client) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, s := range r.Seats {
-		if s.PlayerID == c.playerID && s.Client == nil {
+		if s.PlayerID != c.playerID {
+			continue
+		}
+		// 已超时释放的座位不能夺回（视为空座，需走 sit 流程）
+		if s.isOffline() && time.Since(s.DisconnectedAt) > offlineTimeout {
+			return false
+		}
+		if s.Client == nil {
+			// 掉线座位夺回
 			s.Client = c
+			s.DisconnectedAt = time.Time{}
+			return true
+		}
+		if s.Client != c {
+			// 僵尸连接替换：旧连接尚未感知断开，新连接直接接管
+			// 旧连接的 readPump 终止时会触发 unregister→handleDisconnect，但找不到该 client 已不处理
+			s.Client = c
+			s.DisconnectedAt = time.Time{}
 			return true
 		}
 	}

@@ -110,6 +110,10 @@ func (rm *RoomManager) handleAction(c *Client, action string, data ActionData) {
 	case "joinRoom":
 		rm.joinRoom(c, data)
 		return
+	case "ping":
+		// 应用层心跳：回复 pong，不进入房间逻辑
+		c.sendMsg(Message{Type: "pong", Data: ActionData{}})
+		return
 	}
 
 	// 其余动作需在房间内
@@ -158,18 +162,46 @@ func (rm *RoomManager) joinRoom(c *Client, data ActionData) {
 	if c.name == "" {
 		c.name = "玩家" + c.playerID[:4]
 	}
-	// 重连恢复座位
+	// 重连恢复座位（夺回掉线座位或替换僵尸连接）
 	if room.tryReclaim(c) {
 		c.room = room
+		// 防御性：确保不在旁观者列表中重复
+		room.mu.Lock()
+		for i, sp := range room.Spectators {
+			if sp == c {
+				room.Spectators = append(room.Spectators[:i], room.Spectators[i+1:]...)
+				break
+			}
+		}
+		room.mu.Unlock()
 		c.sendMsg(Message{Type: "joined", Data: ActionData{"code": code, "reclaimed": true}})
 		room.broadcastState()
 		return
 	}
-	c.room = room
+	// 已在该房间旁观则不重复加入（防止重复 joinRoom 导致消息重复）
 	room.mu.Lock()
-	room.Spectators = append(room.Spectators, c)
+	alreadySpectator := false
+	for _, sp := range room.Spectators {
+		if sp == c {
+			alreadySpectator = true
+			break
+		}
+	}
+	// 若已在某座位（在线），也不重复加入
+	for _, s := range room.Seats {
+		if s.Client == c {
+			alreadySpectator = true
+			break
+		}
+	}
+	if !alreadySpectator {
+		c.room = room
+		room.Spectators = append(room.Spectators, c)
+	}
 	room.mu.Unlock()
 	c.sendMsg(Message{Type: "joined", Data: ActionData{"code": code}})
-	room.systemChat(c.name + " 加入了房间")
+	if !alreadySpectator {
+		room.systemChat(c.name + " 加入了房间")
+	}
 	room.broadcastState()
 }

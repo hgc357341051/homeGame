@@ -224,6 +224,47 @@ func (e *nnEngine) PlayerHand(s *Seat) []Card {
 	return s.Hand
 }
 
+// OnSeatVacated 座位被腾空（踢人/超时）：押注阶段推进回合或结算，凑牛阶段检查是否可直接结算
+func (e *nnEngine) OnSeatVacated(r *Room, seat int) []Event {
+	if e.phase != "betting" && e.phase != "setNiu" {
+		return nil
+	}
+	// 标记为弃牌，使 nextActive / bettingRoundComplete / setNiu 统计自然跳过
+	if seat >= 0 && seat < len(r.Seats) {
+		r.Seats[seat].IsFolded = true
+	}
+	if e.phase == "betting" {
+		// 重新统计活跃玩家数（跳过已弃牌与已腾空座位）
+		actives := 0
+		for _, seatIdx := range e.occupied {
+			s := r.Seats[seatIdx]
+			if !s.IsFolded && s.PlayerID != "" {
+				actives++
+			}
+		}
+		e.activeCount = actives
+		if actives <= 1 {
+			return e.settleByFold(r)
+		}
+		// 若当前轮到的是被腾空座位，推进到下一活跃玩家
+		if len(e.occupied) > 0 && e.occupied[e.currentSeat] == seat {
+			e.nextActive(r)
+		}
+		return []Event{e.turnEvent(r)}
+	}
+	// setNiu 阶段：若所有非弃牌玩家都已凑牛，则直接结算
+	expected := 0
+	for _, seatIdx := range e.occupied {
+		if !r.Seats[seatIdx].IsFolded {
+			expected++
+		}
+	}
+	if e.setCount >= expected {
+		return e.settle(r)
+	}
+	return nil
+}
+
 func (e *nnEngine) Start(r *Room) []Event {
 	// 保留 dealerIdx 跨局轮转
 	prevDealer := e.dealerIdx

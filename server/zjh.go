@@ -127,11 +127,31 @@ func (e *zjhEngine) idxOf(seat int) int {
 func (e *zjhEngine) activeSeats(r *Room) []int {
 	out := []int{}
 	for _, s := range e.occupied {
-		if !r.Seats[s].IsFolded {
+		seat := r.Seats[s]
+		// 跳过已弃牌或已腾空（PlayerID 被清空）的座位
+		if !seat.IsFolded && seat.PlayerID != "" {
 			out = append(out, s)
 		}
 	}
 	return out
+}
+
+// OnSeatVacated 座位被腾空（踢人/超时）：若轮到该座位则推进，仅剩一人则结算
+func (e *zjhEngine) OnSeatVacated(r *Room, seat int) []Event {
+	if e.phase != "betting" {
+		return nil
+	}
+	actives := e.activeSeats(r)
+	if len(actives) <= 1 {
+		// 仅剩一人，直接结算
+		e.activeCount = len(actives)
+		return e.settleByFold(r)
+	}
+	// 若当前轮到的是被腾空座位，推进到下一活跃玩家
+	if len(e.occupied) > 0 && e.occupied[e.currentSeat] == seat {
+		e.nextActive(r)
+	}
+	return []Event{e.turnEvent(r)}
 }
 
 func (e *zjhEngine) callCost(seat *Seat) int {
@@ -228,7 +248,8 @@ func (e *zjhEngine) nextActive(r *Room) {
 	n := len(e.occupied)
 	for i := 0; i < n; i++ {
 		e.currentSeat = (e.currentSeat + 1) % n
-		if !r.Seats[e.occupied[e.currentSeat]].IsFolded {
+		seat := r.Seats[e.occupied[e.currentSeat]]
+		if !seat.IsFolded && seat.PlayerID != "" {
 			return
 		}
 	}

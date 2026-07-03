@@ -8,19 +8,28 @@ const LS_NAME = 'fc_name'
 
 let socket: WebSocket | null = null
 let connectPromise: Promise<void> | null = null
+// 已加入的房间号（用于断线重连后重新 joinRoom）
+let joinedCode: string | null = null
+// 心跳与重连定时器
+let heartbeatTimer: any = null
+let reconnectTimer: any = null
+let reconnectAttempts = 0
+const HEARTBEAT_INTERVAL = 15000 // 15s 应用层心跳
+const MAX_RECONNECT = 8
 
 export const useGameStore = defineStore('game', () => {
   const playerId = ref(localStorage.getItem(LS_PID) || '')
   const name = ref(localStorage.getItem(LS_NAME) || '')
   const connected = ref(false)
   const connecting = ref(false)
+  const reconnecting = ref(false)
 
   const room = ref<RoomState | null>(null)
   const myHand = ref<Card[]>([])
   const chat = ref<ChatMsg[]>([])
   const turn = ref<{ seat: number; phase: string; actions: string[]; currentBet?: number; pot?: number; callCost?: number; blindMode?: boolean } | null>(null)
   const phaseMsg = ref<string>('')
-  const log = ref<{ id: number; text: string; kind: string }[]>([])
+  const log = ref<{ id: number; ts: number; text: string; kind: string }[]>([])
   const reveal = ref<any>(null)
   const settle = ref<any>(null)
   const errorToast = ref<string>('')
@@ -35,7 +44,7 @@ export const useGameStore = defineStore('game', () => {
   const isMyTurn = computed(() => turn.value?.seat === room.value?.mySeat)
 
   function pushLog(text: string, kind = 'info') {
-    log.value.push({ id: ++logId, text, kind })
+    log.value.push({ id: ++logId, ts: Date.now(), text, kind })
     if (log.value.length > 60) log.value.shift()
   }
 
@@ -45,7 +54,45 @@ export const useGameStore = defineStore('game', () => {
     errorTimer = setTimeout(() => (errorToast.value = ''), 2600)
   }
 
-  function connect(): Promise<void> {
+  function startHeartbeat() {
+    stopHeartbeat()
+    heartbeatTimer = setInterval(() => {
+      // 应用层心跳：发 ping，服务端可记录；同时检测连接是否健康
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        send('ping', {})
+      }
+    }, HEARTBEAT_INTERVAL)
+  }
+  function stopHeartbeat() {
+    if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null }
+  }
+
+  // 断线自动重连：递增退避，重连成功后自动重新 joinRoom 夺回座位
+  function scheduleReconnect() {
+    if (reconnectTimer) return
+    if (reconnectAttempts >= MAX_RECONNECT) {
+      reconnecting.value = false
+      showError('重连失败，请刷新页面')
+      return
+    }
+    reconnecting.value = true
+    reconnectAttempts++
+    const delay = Math.min(1000 * reconnectAttempts, 5000)
+    reconnectTimer = setTimeout(async () => {
+      reconnectTimer = null
+      try {
+        await connect(true)
+        // 重连成功：重新进入房间
+        if (joinedCode) {
+          send('joinRoom', { code: joinedCode })
+        }
+      } catch {
+        scheduleReconnect()
+      }
+    }, delay)
+  }
+
+  function connect(isReconnect = false): Promise<void> {
     if (socket && socket.readyState === WebSocket.OPEN) {
       connected.value = true
       return Promise.resolve()
@@ -60,8 +107,11 @@ export const useGameStore = defineStore('game', () => {
       ws.onopen = () => {
         connected.value = true
         connecting.value = false
+        reconnecting.value = false
+        reconnectAttempts = 0
         // 上报 enter（携带本地 playerId 以便重连夺回座位）
         ws.send(JSON.stringify({ type: 'enter', data: { name: name.value, playerId: playerId.value } }))
+        startHeartbeat()
         resolve()
       }
       ws.onmessage = (ev) => {
@@ -74,13 +124,18 @@ export const useGameStore = defineStore('game', () => {
       }
       ws.onerror = () => {
         connecting.value = false
-        showError('网络连接异常')
+        if (!isReconnect) showError('网络连接异常')
       }
       ws.onclose = () => {
         connected.value = false
         connecting.value = false
         socket = null
         connectPromise = null
+        stopHeartbeat()
+        // 若仍在房间内则尝试自动重连
+        if (joinedCode && reconnectAttempts < MAX_RECONNECT) {
+          scheduleReconnect()
+        }
       }
       // 超时保护
       setTimeout(() => {
@@ -101,6 +156,12 @@ export const useGameStore = defineStore('game', () => {
     localStorage.setItem(LS_NAME, n)
   }
 
+  function joinRoom(code: string) {
+    // 记录已加入的房间号，断线重连时自动重新加入
+    joinedCode = code
+    send('joinRoom', { code })
+  }
+
   function handle(msg: ServerMessage) {
     const d = msg.data || {}
     switch (msg.type) {
@@ -110,6 +171,7 @@ export const useGameStore = defineStore('game', () => {
         if (d.name) name.value = d.name
         break
       case 'roomCreated':
+        joinedCode = d.code
         router.push(`/room/${d.code}`)
         break
       case 'joined':
@@ -187,6 +249,10 @@ export const useGameStore = defineStore('game', () => {
 
   function leaveRoom() {
     send('leave', {})
+    joinedCode = null
+    stopHeartbeat()
+    reconnectAttempts = MAX_RECONNECT // 阻止自动重连
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
     room.value = null
     myHand.value = []
     chat.value = []
@@ -196,11 +262,16 @@ export const useGameStore = defineStore('game', () => {
     router.push('/')
   }
 
+  function kickSeat(seat: number) {
+    send('kick', { seat })
+  }
+
   return {
     playerId,
     name,
     connected,
     connecting,
+    reconnecting,
     room,
     myHand,
     chat,
@@ -216,9 +287,11 @@ export const useGameStore = defineStore('game', () => {
     connect,
     send,
     setName,
+    joinRoom,
     clearReveal,
     clearSettle,
     leaveRoom,
     seatName,
+    kickSeat,
   }
 })

@@ -19,12 +19,13 @@ function sendQuick(q: string) {
 }
 
 const items = computed(() => {
-  // 合并聊天与事件日志，按时间排序展示
+  // 合并聊天与事件日志，按统一时间戳排序展示
   const chatItems = store.chat.map((c) => ({
     kind: c.system ? ('system' as const) : ('chat' as const),
     ts: c.ts, player: c.player, text: c.text
   }))
-  const logItems = store.log.map((l) => ({ kind: 'log' as const, ts: l.id, player: '', text: l.text }))
+  // log 项使用存储的时间戳（与 chat 同为 Date.now() 量级），保证正确交错
+  const logItems = store.log.map((l) => ({ kind: 'log' as const, ts: l.ts, player: '', text: l.text }))
   return [...chatItems, ...logItems].sort((a, b) => a.ts - b.ts)
 })
 

@@ -22,6 +22,8 @@ export interface SeatView {
   isLooked?: boolean
   isOwner?: boolean
   online: boolean
+  offline?: boolean
+  offlineLeft?: number
   currentBet?: number
   hasNiu?: boolean
   niuValue?: number

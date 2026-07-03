@@ -21,6 +21,12 @@ const statusBadge = computed(() => {
 })
 
 const empty = computed(() => !props.seat.playerId)
+const offlineLeftText = computed(() => {
+  if (!props.seat.offline || !props.seat.offlineLeft) return ''
+  const m = Math.floor(props.seat.offlineLeft / 60)
+  const s = props.seat.offlineLeft % 60
+  return `${m}:${s.toString().padStart(2, '0')}`
+})
 
 function renameSeat() {
   if (empty.value) return
@@ -44,7 +50,10 @@ function renameSeat() {
         <span class="name clickable" @click="renameSeat" title="点击修改昵称">{{ seat.name }}</span>
         <span class="owner-tag" v-if="seat.isOwner">房主</span>
         <span class="badge" :class="statusBadge.cls" v-if="statusBadge">{{ statusBadge.text }}</span>
-        <span class="badge looked" v-if="seat.isLooked && !seat.isFolded">看牌</span>
+        <span class="badge offline-badge" v-if="seat.offline" :title="store.isOwner ? '点击踢人释放座位' : '掉线保留中'">
+          掉线 {{ offlineLeftText }}
+        </span>
+        <span class="badge looked" v-if="seat.isLooked && !seat.isFolded && !seat.offline">看牌</span>
         <span class="badge revealed" v-if="seat.isRevealed">已开牌</span>
         <span class="badge looking" v-if="seat.lookedIndices && !seat.isRevealed && !seat.isFolded">
           看{{ seat.lookedIndices.filter(Boolean).length }}/{{ seat.lookedIndices.length }}
@@ -193,6 +202,12 @@ function renameSeat() {
   background: rgba(139, 38, 53, 0.3);
   color: #ffb38a;
   border: 1px solid rgba(139, 38, 53, 0.5);
+}
+.badge.offline-badge {
+  background: rgba(251, 191, 36, 0.25);
+  color: #fbbf24;
+  border: 1px solid rgba(251, 191, 36, 0.6);
+  animation: pulseGold 1.6s ease-in-out infinite;
 }
 .meta {
   display: flex;

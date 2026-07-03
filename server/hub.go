@@ -61,7 +61,8 @@ func (h *Hub) run() {
 			h.mu.Unlock()
 		case c := <-h.unregister:
 			h.mu.Lock()
-			if _, ok := h.clients[c.playerID]; ok {
+			// 仅当 map 中仍是该 client 时才删除（避免删除掉已替换的新连接）
+			if existing, ok := h.clients[c.playerID]; ok && existing == c {
 				delete(h.clients, c.playerID)
 			}
 			h.mu.Unlock()

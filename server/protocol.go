@@ -39,6 +39,8 @@ type SeatView struct {
 	IsLooked     bool   `json:"isLooked,omitempty"`
 	IsOwner      bool   `json:"isOwner,omitempty"`
 	Online       bool   `json:"online"`
+	Offline      bool   `json:"offline,omitempty"`              // 掉线保留座位中（可被夺回/超时释放）
+	OfflineLeft  int    `json:"offlineLeft,omitempty"`          // 掉线座位剩余秒数（超时释放）
 	CurrentBet   int    `json:"currentBet,omitempty"`
 	HasNiu       bool   `json:"hasNiu,omitempty"`
 	NiuValue     int    `json:"niuValue,omitempty"`
