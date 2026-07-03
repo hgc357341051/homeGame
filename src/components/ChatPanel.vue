@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, nextTick, watch, computed } from 'vue'
+import { ref, nextTick, watch, computed, onMounted } from 'vue'
 import { useGameStore } from '@/stores/game'
 
 const store = useGameStore()
@@ -8,13 +8,22 @@ const listRef = ref<HTMLElement>()
 
 const quick = ['打到我了！', '稳住能赢', '再来一局', '好牌！', '我要炸了', '让我想想']
 
+// 发送防抖：避免按住回车刷屏
+let lastSent = 0
+function canSend() {
+  const now = Date.now()
+  if (now - lastSent < 300) return false
+  lastSent = now
+  return true
+}
 function send() {
   const t = text.value.trim()
-  if (!t) return
+  if (!t || !canSend()) return
   store.send('chat', { text: t })
   text.value = ''
 }
 function sendQuick(q: string) {
+  if (!canSend()) return
   store.send('chat', { text: q })
 }
 
@@ -25,8 +34,14 @@ const items = computed(() => {
     ts: c.ts, player: c.player, text: c.text
   }))
   // log 项使用存储的时间戳（与 chat 同为 Date.now() 量级），保证正确交错
-  const logItems = store.log.map((l) => ({ kind: 'log' as const, ts: l.ts, player: '', text: l.text }))
+  const logItems = store.log.map((l) => ({ kind: 'log' as const, ts: l.ts, player: '', text: l.text, id: l.id }))
   return [...chatItems, ...logItems].sort((a, b) => a.ts - b.ts)
+})
+
+// 挂载时若有历史消息也滚到底
+onMounted(async () => {
+  await nextTick()
+  if (listRef.value) listRef.value.scrollTop = listRef.value.scrollHeight
 })
 
 watch(
@@ -44,7 +59,7 @@ watch(
       <span>消息 / 牌局动态</span>
     </div>
     <div class="list" ref="listRef">
-      <div v-for="(it, i) in items" :key="i" class="item" :class="it.kind">
+      <div v-for="it in items" :key="it.kind + '-' + it.ts + '-' + (it as any).id" class="item" :class="it.kind">
         <template v-if="it.kind === 'chat'">
           <span class="who">{{ it.player }}</span>
           <span class="msg">{{ it.text }}</span>
@@ -66,7 +81,7 @@ watch(
         v-model="text"
         @keydown.enter="send"
         placeholder="发个消息…"
-        maxlength="60"
+        maxlength="200"
       />
       <button class="btn btn-gold" @click="send">发送</button>
     </div>

@@ -1,30 +1,51 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useGameStore } from '@/stores/game'
 import { GAME_META, type GameCode } from '@/types'
 
 const store = useGameStore()
-const name = ref(store.name)
+// 用 computed get/set 与 store.name 双向同步，避免服务端 entered 回写后本地输入框不更新
+const name = computed({
+  get: () => store.name,
+  set: (v: string) => { store.name = v },
+})
 const joinCode = ref('')
 const rulesOpen = ref<GameCode | null>('ddz')
+const creating = ref(false) // 创建房间 loading，防止重复点击创建多房间
 
 onMounted(() => {
-  if (!name.value) name.value = '玩家' + Math.random().toString(36).slice(2, 8).toUpperCase()
+  // 初始化昵称并同步到服务端（App.vue 已 connect，此处 setName 会重发 enter）
+  if (!name.value) {
+    name.value = '玩家' + Math.random().toString(36).slice(2, 8).toUpperCase()
+  }
+  store.setName(name.value)
 })
 
 function commitName() {
   store.setName(name.value.trim() || '匿名玩家')
 }
 
+// 房间号校验：仅 6 位字母数字，过滤非法字符与空格
+const joinCodeValid = computed(() => /^[A-Za-z0-9]{6}$/.test(joinCode.value.trim()))
+function onCodeInput(e: Event) {
+  const v = (e.target as HTMLInputElement).value.toUpperCase().replace(/[^A-Z0-9]/g, '')
+  joinCode.value = v.slice(0, 6)
+}
+
 function createRoom(game: GameCode) {
+  if (creating.value) return
+  creating.value = true
   commitName()
-  store.connect().then(() => store.send('createRoom', { game })).catch(() => {})
+  store.connect().then(() => {
+    store.send('createRoom', { game })
+  }).catch(() => {}).finally(() => {
+    // 路由跳转会卸载组件；保留短暂防抖即可
+    setTimeout(() => { creating.value = false }, 600)
+  })
 }
 function joinRoom() {
+  if (!joinCodeValid.value) return
   const code = joinCode.value.trim().toUpperCase()
-  if (code.length !== 6) {
-    return
-  }
   commitName()
   // 使用 store.joinRoom 而非 store.send，确保 joinedCode 被设置（断线重连依赖）
   store.connect().then(() => store.joinRoom(code)).catch(() => {})
@@ -78,7 +99,7 @@ const rules: Record<GameCode, string[]> = {
     <!-- 昵称 -->
     <section class="name-row glass">
       <label>你的昵称</label>
-      <input v-model="name" @blur="commitName" @keydown.enter="commitName" maxlength="12" placeholder="输入昵称" />
+      <input :value="name" @input="name = ($event.target as HTMLInputElement).value" @blur="commitName" @keydown.enter="commitName" maxlength="12" placeholder="输入昵称" />
     </section>
 
     <!-- 游戏卡片 -->
@@ -87,6 +108,7 @@ const rules: Record<GameCode, string[]> = {
         v-for="g in games"
         :key="g"
         class="gcard glass"
+        :class="{ disabled: creating }"
         :style="{ '--accent': GAME_META[g].accent }"
         @click="createRoom(g)"
       >
@@ -94,7 +116,7 @@ const rules: Record<GameCode, string[]> = {
         <h3 class="gname title-zh">{{ GAME_META[g].label }}</h3>
         <div class="gplayers">{{ GAME_META[g].players }}</div>
         <p class="gdesc">{{ GAME_META[g].desc }}</p>
-        <button class="btn btn-gold enter">创建房间</button>
+        <button class="btn btn-gold enter" :disabled="creating">{{ creating ? '创建中…' : '创建房间' }}</button>
       </article>
     </section>
 
@@ -106,13 +128,14 @@ const rules: Record<GameCode, string[]> = {
       </div>
       <div class="join-right">
         <input
-          v-model="joinCode"
+          :value="joinCode"
           class="code-input"
           maxlength="6"
           placeholder="配对码"
+          @input="onCodeInput"
           @keydown.enter="joinRoom"
         />
-        <button class="btn btn-gold" :disabled="joinCode.length !== 6" @click="joinRoom">进入</button>
+        <button class="btn btn-gold" :disabled="!joinCodeValid" @click="joinRoom">进入</button>
       </div>
     </section>
 
@@ -285,6 +308,10 @@ const rules: Record<GameCode, string[]> = {
 }
 .gcard:hover::before {
   opacity: 0.3;
+}
+.gcard.disabled {
+  pointer-events: none;
+  opacity: 0.6;
 }
 .gicon {
   font-size: 3rem;

@@ -19,13 +19,10 @@ const readyCount = computed(() => {
 })
 const canStart = computed(() => readyCount.value >= (room.value?.minPlayers ?? 99))
 
-// 蒙牌模式开关（仅炸金花，房主在等待阶段设置）
-const blindMode = ref(false)
-// 从房间状态同步蒙牌模式（服务端为权威源，避免本地与远端不一致）
-watch(() => room.value?.blindMode, (v) => { blindMode.value = !!v }, { immediate: true })
-// v-model 已自动同步 blindMode；@change 仅负责把新值发送给服务端，不再重复翻转
-function toggleBlindMode() {
-  store.send('setBlindMode', { blindMode: blindMode.value })
+// 蒙牌模式直接绑定服务端权威值，避免本地 ref 与远端不一致（服务端拒绝时 checkbox 自动回滚）
+function toggleBlindMode(e: Event) {
+  const checked = (e.target as HTMLInputElement).checked
+  store.send('setBlindMode', { blindMode: checked })
 }
 
 // 炸金花比牌目标选择
@@ -35,13 +32,27 @@ const compareTargets = computed<SeatView[]>(() => {
   return room.value.seats.filter((s) => s.playerId && !s.isFolded && s.seat !== room.value!.mySeat)
 })
 
-// 蒙牌模式下未查看的牌索引
+// 回合变化时复位比牌面板，避免显示过期目标（已弃牌/离场玩家）
+watch(() => store.turn, () => { pickingCompare.value = false })
+
+// 蒙牌模式下未查看的牌索引；已开牌后不再显示看牌/开牌按钮
 const unlookedIndices = computed(() => {
-  if (!mySeat.value?.lookedIndices) return []
+  if (!mySeat.value?.lookedIndices || mySeat.value.isRevealed) return []
   return mySeat.value.lookedIndices.map((looked, i) => ({ i, looked })).filter(x => !x.looked).map(x => x.i)
 })
 
+// 防抖：动作发出后短暂禁用按钮，避免重复点击发多次动作
+const acting = ref(false)
+let actingTimer: any = null
+function guardAct() {
+  if (acting.value) return false
+  acting.value = true
+  if (actingTimer) clearTimeout(actingTimer)
+  actingTimer = setTimeout(() => { acting.value = false }, 400)
+  return true
+}
 function act(type: string, data: any = {}) {
+  if (!guardAct()) return
   store.send(type, data)
 }
 function ready() {
@@ -82,8 +93,9 @@ function fold() {
   act('fold')
 }
 function doCompare(target?: number) {
+  if (!guardAct()) return
   pickingCompare.value = false
-  act('compare', target !== undefined ? { target } : {})
+  store.send('compare', target !== undefined ? { target } : {})
 }
 function niuniuConfirm() {
   if (props.selectedCards.length === 3) {
@@ -98,33 +110,33 @@ function niuniuConfirm() {
   <div class="action-bar glass">
     <!-- 等待大厅阶段 -->
     <template v-if="phase === 'waiting'">
-      <button v-if="mySeat && !mySeat.ready" class="btn btn-gold" @click="ready">准备</button>
-      <button v-if="mySeat && mySeat.ready" class="btn btn-ghost" @click="ready">取消准备</button>
-      <!-- 炸金花蒙牌模式开关（仅房主） -->
+      <button v-if="mySeat && !mySeat.ready" class="btn btn-gold" :disabled="acting" @click="ready">准备</button>
+      <button v-if="mySeat && mySeat.ready" class="btn btn-ghost" :disabled="acting" @click="ready">取消准备</button>
+      <!-- 炸金花蒙牌模式开关（仅房主），直接绑定服务端权威值 -->
       <label v-if="isOwner && room?.game === 'zjh'" class="blind-toggle">
-        <input type="checkbox" v-model="blindMode" @change="toggleBlindMode" />
+        <input type="checkbox" :checked="!!room?.blindMode" @change="toggleBlindMode" />
         <span>蒙牌模式</span>
       </label>
-      <button v-if="isOwner" class="btn btn-gold" :disabled="!canStart" @click="start">
+      <button v-if="isOwner" class="btn btn-gold" :disabled="!canStart || acting" @click="start">
         开局 {{ readyCount }}/{{ room?.minPlayers }}+
       </button>
       <span v-if="!isOwner" class="hint">等待房主开局（已准备 {{ readyCount }} 人）</span>
-      <button v-if="mySeat" class="btn btn-ghost" @click="act('stand')">离座旁观</button>
+      <button v-if="mySeat" class="btn btn-ghost" :disabled="acting" @click="act('stand')">离座旁观</button>
     </template>
 
     <!-- 斗地主叫地主 -->
     <template v-else-if="isMyTurn && turn?.phase === 'callLandlord'">
       <span class="prompt">是否当地主？</span>
-      <button class="btn btn-wine" @click="callLandlord(true)">叫地主</button>
-      <button class="btn btn-ghost" @click="callLandlord(false)">不叫</button>
+      <button class="btn btn-wine" :disabled="acting" @click="callLandlord(true)">叫地主</button>
+      <button class="btn btn-ghost" :disabled="acting" @click="callLandlord(false)">不叫</button>
     </template>
 
     <!-- 斗地主出牌 -->
     <template v-else-if="isMyTurn && room?.game === 'ddz' && turn?.phase === 'playing'">
-      <button class="btn btn-gold" :disabled="selectedCards.length === 0" @click="playCards">
+      <button class="btn btn-gold" :disabled="selectedCards.length === 0 || acting" @click="playCards">
         出牌 ({{ selectedCards.length }})
       </button>
-      <button v-if="room.publicArea.lastPlay" class="btn btn-ghost" @click="pass">不要</button>
+      <button v-if="room.publicArea.lastPlay" class="btn btn-ghost" :disabled="acting" @click="pass">不要</button>
       <span v-else class="prompt">自由出牌</span>
     </template>
 
@@ -136,6 +148,7 @@ function niuniuConfirm() {
           v-for="t in compareTargets"
           :key="t.seat"
           class="btn btn-ghost"
+          :disabled="acting"
           @click="doCompare(t.seat)"
         >
           {{ t.name }}
@@ -143,41 +156,42 @@ function niuniuConfirm() {
         <button class="btn btn-ghost" @click="pickingCompare = false">取消</button>
       </template>
       <template v-else>
-        <!-- 蒙牌模式：逐张看牌 + 开牌 -->
-        <template v-if="turn?.blindMode">
+        <!-- 蒙牌模式：逐张看牌 + 开牌（已开牌后不再显示） -->
+        <template v-if="turn?.blindMode && !mySeat?.isRevealed">
           <button
             v-for="idx in unlookedIndices"
             :key="idx"
             class="btn btn-ghost"
+            :disabled="acting"
             @click="lookCard(idx)"
           >
             看第{{ idx + 1 }}张
           </button>
-          <button class="btn btn-ghost" @click="reveal">开牌</button>
+          <button class="btn btn-ghost" :disabled="acting" @click="reveal">开牌</button>
         </template>
         <!-- 非蒙牌模式：看牌 -->
-        <button v-if="turn?.actions?.includes('look')" class="btn btn-ghost" @click="look">看牌</button>
-        <button class="btn btn-gold" @click="callBet">跟注 {{ turn?.callCost }}</button>
-        <button class="btn btn-ghost" @click="raise">加注</button>
-        <button v-if="turn?.actions?.includes('compare')" class="btn btn-ghost" @click="pickingCompare = true">
+        <button v-if="turn?.actions?.includes('look')" class="btn btn-ghost" :disabled="acting" @click="look">看牌</button>
+        <button class="btn btn-gold" :disabled="acting" @click="callBet">跟注 {{ turn?.callCost }}</button>
+        <button class="btn btn-ghost" :disabled="acting" @click="raise">加注</button>
+        <button v-if="turn?.actions?.includes('compare')" class="btn btn-ghost" :disabled="acting" @click="pickingCompare = true">
           比牌
         </button>
-        <button class="btn btn-wine" @click="fold">弃牌</button>
+        <button class="btn btn-wine" :disabled="acting" @click="fold">弃牌</button>
       </template>
     </template>
 
     <!-- 牛牛押注阶段 -->
     <template v-else-if="isMyTurn && room?.game === 'nn' && turn?.phase === 'betting'">
       <span class="prompt">底池 {{ turn?.pot }} · 当前注 {{ turn?.currentBet }}</span>
-      <button class="btn btn-gold" @click="callBet">跟注 {{ turn?.currentBet }}</button>
-      <button class="btn btn-ghost" @click="raise">加注</button>
-      <button class="btn btn-wine" @click="fold">弃牌</button>
+      <button class="btn btn-gold" :disabled="acting" @click="callBet">跟注 {{ turn?.currentBet }}</button>
+      <button class="btn btn-ghost" :disabled="acting" @click="raise">加注</button>
+      <button class="btn btn-wine" :disabled="acting" @click="fold">弃牌</button>
     </template>
 
     <!-- 牛牛凑牛 -->
     <template v-else-if="room?.game === 'nn' && phase === 'playing' && turn?.phase === 'setNiu' && mySeat && !mySeat.hasNiu && !mySeat.isFolded">
       <span class="prompt">选 3 张凑牛（或直接确认自动）</span>
-      <button class="btn btn-gold" @click="niuniuConfirm">
+      <button class="btn btn-gold" :disabled="acting" @click="niuniuConfirm">
         确认 {{ selectedCards.length === 3 ? '(已选3张)' : '(自动)' }}
       </button>
     </template>
@@ -185,7 +199,7 @@ function niuniuConfirm() {
     <!-- 结算阶段 -->
     <template v-else-if="phase === 'settled'">
       <span class="prompt">本局结束</span>
-      <button v-if="isOwner" class="btn btn-gold" @click="start">再来一局</button>
+      <button v-if="isOwner" class="btn btn-gold" :disabled="acting" @click="start">再来一局</button>
       <span v-else class="hint">等待房主开始下一局</span>
     </template>
 

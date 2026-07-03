@@ -71,9 +71,14 @@ export const useGameStore = defineStore('game', () => {
     if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null }
   }
 
-  // 断线自动重连：递增退避，重连成功后自动重新 joinRoom 夺回座位
+  // 断线自动重连：递增退避 + jitter，重连成功后自动重新 joinRoom 夺回座位
   function scheduleReconnect() {
     if (reconnectTimer) return
+    // 已主动离开或无房间：不再无意义重连，避免幽灵连接干扰新房间
+    if (!joinedCode || intentionalClose) {
+      reconnecting.value = false
+      return
+    }
     if (reconnectAttempts >= MAX_RECONNECT) {
       reconnecting.value = false
       failed.value = true
@@ -82,9 +87,15 @@ export const useGameStore = defineStore('game', () => {
     }
     reconnecting.value = true
     reconnectAttempts++
-    const delay = Math.min(1000 * reconnectAttempts, 5000)
+    // 退避 + 随机 jitter，避免多客户端同时断线后雷同重连
+    const delay = Math.min(1000 * reconnectAttempts, 5000) + Math.random() * 300
     reconnectTimer = setTimeout(async () => {
       reconnectTimer = null
+      // 二次校验：定时器触发期间用户可能已主动离开
+      if (!joinedCode || intentionalClose) {
+        reconnecting.value = false
+        return
+      }
       try {
         await connect(true)
         // 重连成功：重新进入房间
@@ -104,6 +115,8 @@ export const useGameStore = defineStore('game', () => {
       intentionalClose = false
       failed.value = false
       reconnectAttempts = 0
+      // 关键：复用已有连接时也需重启心跳（cleanupRoom 停了心跳但未关 socket）
+      startHeartbeat()
       return Promise.resolve()
     }
     if (connectPromise) return connectPromise
@@ -116,6 +129,7 @@ export const useGameStore = defineStore('game', () => {
       const ws = new WebSocket(url)
       socket = ws
       let settled = false
+      let timeoutTimer: any = null
       ws.onopen = () => {
         connected.value = true
         connecting.value = false
@@ -123,6 +137,8 @@ export const useGameStore = defineStore('game', () => {
         failed.value = false
         reconnectAttempts = 0
         intentionalClose = false
+        // 成功后清理超时定时器，避免累积未决定时器
+        if (timeoutTimer) { clearTimeout(timeoutTimer); timeoutTimer = null }
         // 上报 enter（携带本地 playerId 以便重连夺回座位）
         ws.send(JSON.stringify({ type: 'enter', data: { name: name.value, playerId: playerId.value } }))
         startHeartbeat()
@@ -146,7 +162,14 @@ export const useGameStore = defineStore('game', () => {
         connecting.value = false
         socket = null
         connectPromise = null
+        if (timeoutTimer) { clearTimeout(timeoutTimer); timeoutTimer = null }
         stopHeartbeat()
+        // 关键：若连接尚未 settled（onclose 在 onopen 之前触发），需 reject pending Promise
+        // 否则调用方 await connect() 会永久挂起直到 8s 超时
+        if (!settled) {
+          settled = true
+          reject(new Error('连接关闭'))
+        }
         // 主动离开不重连
         if (intentionalClose) return
         // 若仍在房间内则尝试自动重连
@@ -157,8 +180,10 @@ export const useGameStore = defineStore('game', () => {
         }
       }
       // 超时保护：超时则关闭 ws 并清理，避免 promise 泄漏与状态错乱
-      setTimeout(() => {
+      timeoutTimer = setTimeout(() => {
         if (!settled) {
+          settled = true
+          timeoutTimer = null
           ws.close()
           socket = null
           connectPromise = null
@@ -172,13 +197,21 @@ export const useGameStore = defineStore('game', () => {
 
   function send(type: string, data: any = {}) {
     if (socket && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ type, data }))
+      try {
+        socket.send(JSON.stringify({ type, data }))
+      } catch {
+        // 缓冲满或连接异常时吞掉，避免抛入定时器回调无人处理
+      }
     }
   }
 
   function setName(n: string) {
     name.value = n
     localStorage.setItem(LS_NAME, n)
+    // 已连接则重发 enter 同步服务端昵称，避免创建/加入房间仍用旧名
+    if (connected.value) {
+      send('enter', { name: n, playerId: playerId.value })
+    }
   }
 
   function joinRoom(code: string) {
@@ -224,10 +257,13 @@ export const useGameStore = defineStore('game', () => {
             myHand.value = [...myHand.value]
           }
         } else if (d.blindMode && d.cards && d.lookedIndices) {
-          // 蒙牌模式：状态刷新（重连），已查看位置有牌值，未查看为零值占位
+          // 蒙牌模式：状态刷新（重连/广播），已查看位置有牌值，未查看为零值占位
+          // 已开牌（isRevealed）的玩家所有牌均可见，避免开牌后手牌区仍显示占位牌
           const cards = d.cards as Card[]
           const looked = d.lookedIndices as boolean[]
-          myHand.value = cards.map((c, i) => looked[i] ? c : { suit: '', rank: '?', value: 0 })
+          const me = room.value?.seats?.[room.value.mySeat ?? -1]
+          const revealed = !!me?.isRevealed
+          myHand.value = cards.map((c, i) => (revealed || looked[i]) ? c : { suit: '', rank: '?', value: 0 })
         } else {
           myHand.value = d.cards || []
         }
@@ -296,6 +332,9 @@ export const useGameStore = defineStore('game', () => {
     settle.value = null
     phaseMsg.value = ''
     log.value = []
+    // 清理残留错误提示与定时器
+    errorToast.value = ''
+    if (errorTimer) { clearTimeout(errorTimer); errorTimer = null }
   }
 
   function leaveRoom() {

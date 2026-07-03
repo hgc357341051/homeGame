@@ -324,6 +324,11 @@ func (e *zjhEngine) HandleAction(r *Room, seat int, action string, data ActionDa
 		}
 		s.IsRevealed = true
 		s.IsLooked = true // 开牌后视为已看牌
+		// 同步把 LookedIndices 全置 true，确保 PlayerHand/broadcastState 返回完整牌，
+		// 避免开牌后客户端 myHand 仍显示占位牌
+		for i := range s.LookedIndices {
+			s.LookedIndices[i] = true
+		}
 		evs := []Event{{
 			Type: "reveal",
 			Data: ActionData{

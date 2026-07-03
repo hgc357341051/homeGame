@@ -82,7 +82,8 @@ func (c *Client) sendMsg(m Message) {
 	select {
 	case c.send <- b:
 	default:
-		// 缓冲满，丢弃
+		// 缓冲满（客户端慢或断开未感知），丢弃并记录，便于排查重要消息丢失
+		log.Printf("WARN: send buffer 满，丢弃消息 type=%s player=%s", m.Type, c.playerID)
 	}
 }
 

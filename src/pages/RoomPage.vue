@@ -107,6 +107,16 @@ watch(
   () => clearSelection(),
 )
 
+// 路由 room→room 切换时组件实例复用，onMounted 不再触发，需监听 code 重新进入新房间
+watch(
+  () => props.code,
+  (code) => {
+    if (!code) return
+    store.cleanupRoom()
+    joinRoom()
+  },
+)
+
 // 亮牌浮层自动消失
 watch(
   () => store.reveal,
@@ -132,15 +142,44 @@ async function joinRoom() {
 
 function copyCode() {
   const text = props.code.toUpperCase()
-  if (navigator.clipboard) {
-    navigator.clipboard.writeText(text).then(() => {
-      copied.value = true
-      setTimeout(() => (copied.value = false), 1500)
-    })
+  // 优先用 Clipboard API，失败则降级 execCommand，兼容非 HTTPS 与旧浏览器
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(
+      () => {
+        copied.value = true
+        setTimeout(() => (copied.value = false), 1500)
+      },
+      () => fallbackCopy(text),
+    )
+  } else {
+    fallbackCopy(text)
+  }
+}
+
+function fallbackCopy(text: string) {
+  try {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.style.position = 'fixed'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.select()
+    document.execCommand('copy')
+    document.body.removeChild(ta)
+    copied.value = true
+    setTimeout(() => (copied.value = false), 1500)
+  } catch {
+    /* 复制失败静默 */
   }
 }
 
 function leave() {
+  // 对局中误点离开会触发 3 分钟座位保留，需二次确认
+  if (phase.value === 'playing' && mySeatView.value) {
+    if (!window.confirm('对局进行中，确定离开吗？座位将保留 3 分钟供你重连。')) {
+      return
+    }
+  }
   store.leaveRoom()
 }
 
@@ -361,16 +400,39 @@ onUnmounted(() => {
             <span class="reveal-note" v-if="store.reveal.note">{{ store.reveal.note }}</span>
             <span class="reveal-note" v-if="store.reveal.niuName">{{ store.reveal.niuName }}</span>
             <span class="reveal-note" v-if="store.reveal.type">· {{ store.reveal.type }}</span>
+            <span class="reveal-winner" v-if="store.reveal.winner !== undefined && store.reveal.loser !== undefined">
+              {{ store.reveal.winner === store.reveal.seat ? '胜' : '负' }}
+            </span>
           </div>
           <div class="reveal-cards">
             <PlayingCard
               v-for="(c, i) in (store.reveal.cards || [])"
-              :key="i"
+              :key="'a' + i"
               :card="c"
               size="md"
               class="anim-deal"
             />
           </div>
+          <!-- 比牌：展示对手手牌与胜负 -->
+          <template v-if="store.reveal.cards2">
+            <div class="reveal-vs">VS</div>
+            <div class="reveal-head">
+              <span class="reveal-name">{{ seats[store.reveal.seat2]?.name ?? '玩家' }}</span>
+              <span class="reveal-note" v-if="store.reveal.type2">· {{ store.reveal.type2 }}</span>
+              <span class="reveal-winner" v-if="store.reveal.winner !== undefined && store.reveal.loser !== undefined">
+                {{ store.reveal.winner === store.reveal.seat2 ? '胜' : '负' }}
+              </span>
+            </div>
+            <div class="reveal-cards">
+              <PlayingCard
+                v-for="(c, i) in store.reveal.cards2"
+                :key="'b' + i"
+                :card="c"
+                size="md"
+                class="anim-deal"
+              />
+            </div>
+          </template>
         </div>
       </div>
     </transition>
@@ -832,6 +894,22 @@ onUnmounted(() => {
   gap: 6px;
   justify-content: center;
   flex-wrap: wrap;
+}
+.reveal-vs {
+  text-align: center;
+  font-weight: 700;
+  color: var(--gold);
+  margin: 0.4rem 0;
+  font-size: 1.1rem;
+  letter-spacing: 0.2em;
+}
+.reveal-winner {
+  font-size: 0.75rem;
+  padding: 0.05rem 0.45rem;
+  border-radius: 6px;
+  background: var(--gold);
+  color: var(--ink);
+  font-weight: 700;
 }
 
 /* ===== 过渡 ===== */

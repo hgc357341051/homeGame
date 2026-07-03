@@ -64,9 +64,12 @@ const offlineLeftText = computed(() => {
 
 function renameSeat() {
   if (empty.value) return
-  const newName = window.prompt('修改昵称', props.seat.name)
-  if (newName && newName.trim()) {
-    store.send('rename', { seat: props.seat.seat, name: newName.trim() })
+  const newName = window.prompt('修改昵称（1-16字）', props.seat.name)
+  if (newName) {
+    const trimmed = newName.trim().slice(0, 16)
+    if (trimmed) {
+      store.send('rename', { seat: props.seat.seat, name: trimmed })
+    }
   }
 }
 </script>

@@ -17,9 +17,15 @@ const props = withDefaults(
 const emit = defineEmits<{ (e: 'change', selected: Card[]): void }>()
 const selectedKeys = ref<Set<string>>(new Set())
 
+// 牌变化时（发牌/换局）清空选择并通知父组件，避免残留上一轮选择
 watch(
   () => props.cards,
-  () => selectedKeys.value.clear(),
+  () => {
+    if (selectedKeys.value.size > 0) {
+      selectedKeys.value = new Set()
+      emit('change', [])
+    }
+  },
 )
 
 // 根据牌数与尺寸动态计算重叠间距，避免大量牌时溢出
@@ -97,11 +103,40 @@ function stopDrag() {
   dragging.value = false
 }
 
+// 触摸滑动多选（移动端）：通过 elementFromPoint 命中牌
+function onTouchStart(c: Card, e: TouchEvent) {
+  if (!props.selectable) return
+  dragging.value = true
+  dragMode.value = selectedKeys.value.has(cardKey(c)) ? 'deselect' : 'select'
+  applyDrag(c)
+}
+
+function onTouchMove(e: TouchEvent) {
+  if (!dragging.value) return
+  e.preventDefault()
+  const t = e.touches[0]
+  const el = document.elementFromPoint(t.clientX, t.clientY) as HTMLElement | null
+  // 命中的元素可能是 PlayingCard 内部，向上找最近的 .slot
+  const slot = el?.closest('.slot') as HTMLElement | null
+  if (slot) {
+    const idx = Number(slot.dataset.idx)
+    if (!Number.isNaN(idx) && idx >= 0 && idx < props.cards.length) {
+      applyDrag(props.cards[idx])
+    }
+  }
+}
+
+function onTouchEnd() {
+  dragging.value = false
+}
+
 onMounted(() => {
   window.addEventListener('mouseup', stopDrag)
+  window.addEventListener('touchend', onTouchEnd)
 })
 onUnmounted(() => {
   window.removeEventListener('mouseup', stopDrag)
+  window.removeEventListener('touchend', onTouchEnd)
 })
 
 function isSelected(c: Card) {
@@ -126,11 +161,14 @@ defineExpose({
         v-for="(c, i) in cards"
         :key="cardKey(c) + i"
         class="slot"
+        :data-idx="i"
         :class="{ sel: isSelected(c) }"
         :style="{ zIndex: i, marginLeft: i === 0 ? '0' : overlapPx + 'px' }"
         @click="toggle(c)"
         @mousedown="onDragStart(c, $event)"
         @mouseenter="onDragEnter(c)"
+        @touchstart="onTouchStart(c, $event)"
+        @touchmove="onTouchMove"
       >
         <PlayingCard :card="c" :selected="isSelected(c)" :size="size" />
       </div>
