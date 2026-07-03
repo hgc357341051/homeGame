@@ -149,7 +149,7 @@ func serveWS(hub *Hub, w http.ResponseWriter, r *http.Request) {
 		hub:      hub,
 		conn:     conn,
 		send:     make(chan []byte, 256),
-		playerID: genID(),
+		playerID: hub.genUniqueID(),
 	}
 	hub.register <- client
 	go client.writePump()

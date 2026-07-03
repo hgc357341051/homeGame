@@ -43,7 +43,8 @@ const canSelectCards = computed(() => {
 const maxSelect = computed(() => (game.value === 'nn' ? 3 : 0))
 
 const handCardSize = computed<'sm' | 'md'>(() => {
-  if (store.myHand.length > 10) return 'sm'
+  if (isMobile.value && store.myHand.length > 10) return 'sm'
+  if (store.myHand.length > 15) return 'sm'
   return 'md'
 })
 
@@ -154,7 +155,7 @@ function clickSeat(seat: SeatView) {
 
 onMounted(() => {
   if (!store.name) {
-    store.setName('玩家' + Math.random().toString(36).slice(2, 6).toUpperCase())
+    store.setName('玩家' + Math.random().toString(36).slice(2, 8).toUpperCase())
   }
   checkMobile()
   window.addEventListener('resize', checkMobile)
@@ -709,7 +710,7 @@ onUnmounted(() => {
   display: flex;
   justify-content: center;
   align-items: flex-end;
-  min-height: 90px;
+  min-height: 120px;
 }
 .spectator-area {
   align-items: center;
@@ -899,7 +900,7 @@ onUnmounted(() => {
     gap: 0.35rem;
   }
   .my-hand-wrap {
-    min-height: 70px;
+    min-height: 90px;
   }
   .public-area {
     min-width: 120px;

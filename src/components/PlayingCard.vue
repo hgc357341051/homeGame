@@ -20,10 +20,10 @@ const isBigJoker = computed(() => props.card?.rank === '大王')
 const red = computed(() => (props.card ? isRedSuit(props.card.suit) || props.card.rank === '大王' : false))
 
 const sizeMap = {
-  xs: { w: 34, h: 48, fs: 13, big: 18 },
-  sm: { w: 44, h: 62, fs: 15, big: 22 },
-  md: { w: 58, h: 82, fs: 18, big: 30 },
-  lg: { w: 70, h: 100, fs: 22, big: 38 },
+  xs: { w: 38, h: 54, fs: 13, big: 18 },
+  sm: { w: 52, h: 74, fs: 16, big: 24 },
+  md: { w: 68, h: 96, fs: 20, big: 34 },
+  lg: { w: 84, h: 120, fs: 26, big: 42 },
 }
 const s = computed(() => sizeMap[props.size])
 

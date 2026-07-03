@@ -36,11 +36,24 @@ func genRoomCode(rm *RoomManager) string {
 
 var idAlphabet = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
 
+// genUniqueID 生成唯一玩家 ID，最多重试 100 次以避免碰撞。
+func (h *Hub) genUniqueID() string {
+	for i := 0; i < 100; i++ {
+		id := genID()
+		h.mu.Lock()
+		_, exists := h.clients[id]
+		h.mu.Unlock()
+		if !exists {
+			return id
+		}
+	}
+	return genID() // 极端情况下兜底返回
+}
+
 func genID() string {
-	r := rand.New(rand.NewSource(time.Now().UnixNano() + int64(rand.Intn(1<<30))))
 	b := make([]rune, 12)
 	for i := range b {
-		b[i] = idAlphabet[r.Intn(len(idAlphabet))]
+		b[i] = idAlphabet[rand.Intn(len(idAlphabet))]
 	}
 	return string(b)
 }

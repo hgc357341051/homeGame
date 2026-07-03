@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { Card } from '@/types'
 import { cardKey } from '@/types'
 import PlayingCard from './PlayingCard.vue'
@@ -26,30 +26,83 @@ watch(
 const overlapPx = computed(() => {
   const n = props.cards.length
   const sm = props.size === 'sm'
-  if (n <= 5) return sm ? -18 : -26
-  if (n <= 10) return sm ? -26 : -34
-  return sm ? -30 : -42
+  if (n <= 5) return sm ? -12 : -16
+  if (n <= 10) return sm ? -18 : -24
+  return sm ? -24 : -32
 })
 
-function toggle(c: Card) {
-  if (!props.selectable) return
-  const k = cardKey(c)
-  if (selectedKeys.value.has(k)) {
-    selectedKeys.value.delete(k)
-  } else {
-    if (props.maxSelect > 0 && selectedKeys.value.size >= props.maxSelect) {
-      // 达到上限：替换最早选择的（牛牛选 3 张场景）
-      const first = selectedKeys.value.values().next().value
-      if (first) selectedKeys.value.delete(first)
-    }
-    selectedKeys.value.add(k)
-  }
+// ===== 拖拽滑动选中 =====
+const dragging = ref(false)
+const dragMode = ref<'select' | 'deselect'>('select')
+
+function emitChange() {
   selectedKeys.value = new Set(selectedKeys.value)
   emit(
     'change',
     props.cards.filter((c) => selectedKeys.value.has(cardKey(c))),
   )
 }
+
+function selectCard(c: Card) {
+  const k = cardKey(c)
+  if (selectedKeys.value.has(k)) return
+  if (props.maxSelect > 0 && selectedKeys.value.size >= props.maxSelect) {
+    const first = selectedKeys.value.values().next().value
+    if (first) selectedKeys.value.delete(first)
+  }
+  selectedKeys.value.add(k)
+}
+
+function deselectCard(c: Card) {
+  selectedKeys.value.delete(cardKey(c))
+}
+
+function toggle(c: Card) {
+  if (!props.selectable) return
+  const k = cardKey(c)
+  if (selectedKeys.value.has(k)) {
+    deselectCard(c)
+  } else {
+    selectCard(c)
+  }
+  emitChange()
+}
+
+function onDragStart(c: Card, e: MouseEvent) {
+  if (!props.selectable) return
+  // 仅左键触发
+  if (e.button !== 0) return
+  e.preventDefault()
+  dragging.value = true
+  // 根据起始牌状态决定本次拖拽模式：选中→取消模式，未选中→选中模式
+  dragMode.value = selectedKeys.value.has(cardKey(c)) ? 'deselect' : 'select'
+  applyDrag(c)
+}
+
+function onDragEnter(c: Card) {
+  if (!dragging.value) return
+  applyDrag(c)
+}
+
+function applyDrag(c: Card) {
+  if (dragMode.value === 'select') {
+    selectCard(c)
+  } else {
+    deselectCard(c)
+  }
+  emitChange()
+}
+
+function stopDrag() {
+  dragging.value = false
+}
+
+onMounted(() => {
+  window.addEventListener('mouseup', stopDrag)
+})
+onUnmounted(() => {
+  window.removeEventListener('mouseup', stopDrag)
+})
 
 function isSelected(c: Card) {
   return selectedKeys.value.has(cardKey(c))
@@ -67,7 +120,7 @@ defineExpose({
 </script>
 
 <template>
-  <div class="hand" :class="{ selectable }">
+  <div class="hand" :class="{ selectable, dragging }">
     <div class="cards">
       <div
         v-for="(c, i) in cards"
@@ -76,6 +129,8 @@ defineExpose({
         :class="{ sel: isSelected(c) }"
         :style="{ zIndex: i, marginLeft: i === 0 ? '0' : overlapPx + 'px' }"
         @click="toggle(c)"
+        @mousedown="onDragStart(c, $event)"
+        @mouseenter="onDragEnter(c)"
       >
         <PlayingCard :card="c" :selected="isSelected(c)" :size="size" />
       </div>
@@ -96,7 +151,7 @@ defineExpose({
   display: flex;
   align-items: flex-end;
   position: relative;
-  min-height: 96px;
+  min-height: 120px;
 }
 .slot {
   transition: transform 0.18s ease;
@@ -107,6 +162,10 @@ defineExpose({
 }
 .selectable .slot:hover {
   transform: translateY(-8px);
+}
+/* 拖拽时禁用 hover 上浮，避免与选中态叠加跳动 */
+.selectable.dragging .slot:hover {
+  transform: none;
 }
 .slot.sel {
   /* 选中上浮由 PlayingCard 内部处理 */
@@ -119,7 +178,7 @@ defineExpose({
 
 @media (max-width: 768px) {
   .cards {
-    min-height: 70px;
+    min-height: 90px;
   }
 }
 </style>

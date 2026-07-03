@@ -9,7 +9,7 @@ const joinCode = ref('')
 const rulesOpen = ref<GameCode | null>('ddz')
 
 onMounted(() => {
-  if (!name.value) name.value = '玩家' + Math.random().toString(36).slice(2, 6).toUpperCase()
+  if (!name.value) name.value = '玩家' + Math.random().toString(36).slice(2, 8).toUpperCase()
 })
 
 function commitName() {
