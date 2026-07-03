@@ -85,6 +85,7 @@ const coins = Array.from({ length: 18 }, (_, i) => ({
 
         <div class="footer">
           <button v-if="store.isOwner" class="btn btn-gold" @click="again">再来一局</button>
+          <span v-else class="wait-hint">等待房主开始下一局…</span>
           <button class="btn btn-ghost" @click="close">关闭</button>
         </div>
       </div>
@@ -213,7 +214,12 @@ const coins = Array.from({ length: 18 }, (_, i) => ({
   display: flex;
   gap: 0.6rem;
   justify-content: center;
+  align-items: center;
   margin-top: 0.6rem;
+}
+.wait-hint {
+  color: var(--ivory-dim);
+  font-size: 0.85rem;
 }
 .modal-enter-active,
 .modal-leave-active {

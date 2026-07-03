@@ -18,6 +18,10 @@ const chatOpen = ref(false)
 const copied = ref(false)
 const revealVisible = ref(false)
 const isMobile = ref(false)
+// 横屏翻转：用户在竖屏锁定时点击按钮，CSS 旋转整个房间视图为横屏布局
+const landscapeMode = ref(false)
+// 房间号大字分享弹窗：点击房间号弹出，便于远距离查看/截图分享
+const shareOpen = ref(false)
 let revealTimer: any = null
 
 const room = computed(() => store.room)
@@ -31,6 +35,12 @@ const publicArea = computed(() => room.value?.publicArea ?? ({} as any))
 const mySeatView = computed(() => {
   if (mySeat.value < 0) return null
   return seats.value[mySeat.value] ?? null
+})
+
+// 空位数量：用于旁观者入座引导
+const emptySeatCount = computed(() => {
+  if (!room.value) return 0
+  return seats.value.filter((s) => !s.playerId).length
 })
 
 const isMyTurn = computed(() => store.isMyTurn && phase.value === 'playing')
@@ -56,6 +66,15 @@ const phaseMessage = computed(() => publicArea.value?.message || store.phaseMsg)
 function checkMobile() {
   isMobile.value = window.innerWidth < 900
 }
+
+function toggleLandscape() {
+  landscapeMode.value = !landscapeMode.value
+}
+
+// 退出横屏翻转：系统已横屏时无需翻转，自动关闭
+watch(isMobile, () => {
+  if (!isMobile.value) landscapeMode.value = false
+})
 
 function seatAngle(seatIndex: number): number {
   const N = maxPlayers.value || 1
@@ -173,6 +192,12 @@ function fallbackCopy(text: string) {
   }
 }
 
+// 分享弹窗内的复制按钮：复制后关闭弹窗
+function copyAndCloseShare() {
+  copyCode()
+  shareOpen.value = false
+}
+
 function leave() {
   // 对局中误点离开会触发 3 分钟座位保留，需二次确认
   if (phase.value === 'playing' && mySeatView.value) {
@@ -215,7 +240,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="room-page">
+  <div class="room-page" :class="{ 'landscape-rotate': landscapeMode }">
     <!-- 头部 -->
     <header class="room-header glass">
       <div class="room-info">
@@ -224,7 +249,7 @@ onUnmounted(() => {
           <div class="game-name">{{ room?.gameLabel ?? '加载中…' }}</div>
           <div class="code-row">
             <span class="code-label">房间号</span>
-            <span class="code-value">{{ code.toUpperCase() }}</span>
+            <span class="code-value clickable-code" @click="shareOpen = true" title="点击大字分享">{{ code.toUpperCase() }}</span>
             <button class="copy-btn" @click="copyCode">{{ copied ? '✓ 已复制' : '复制' }}</button>
           </div>
         </div>
@@ -234,6 +259,14 @@ onUnmounted(() => {
           <span class="dot" :class="{ on: store.connected, reconnect: store.reconnecting, fail: store.failed }" />
           <span class="conn-text">{{ store.failed ? '已断开' : (store.reconnecting ? '重连中…' : (store.connected ? '在线' : '连接中…')) }}</span>
         </div>
+        <button
+          v-if="isMobile"
+          class="btn btn-ghost icon-btn"
+          :class="{ active: landscapeMode }"
+          @click="toggleLandscape"
+          :aria-label="landscapeMode ? '退出横屏' : '横屏显示'"
+          :title="landscapeMode ? '退出横屏' : '横屏显示'"
+        >↻</button>
         <button class="btn btn-ghost leave-btn" @click="leave">离开房间</button>
         <button class="btn btn-ghost chat-fab" @click="chatOpen = !chatOpen" aria-label="消息">💬</button>
       </div>
@@ -369,7 +402,10 @@ onUnmounted(() => {
         <div class="my-area spectator-area" v-else>
           <div class="spec-hint">
             <span>👀 旁观中</span>
-            <span class="spec-sub">等待空位后点击入座</span>
+            <span class="spec-sub">
+              <template v-if="emptySeatCount > 0">点击桌上空位入座（{{ emptySeatCount }} 个空位）</template>
+              <template v-else>座位已满，等待玩家离开</template>
+            </span>
           </div>
         </div>
       </main>
@@ -439,6 +475,22 @@ onUnmounted(() => {
 
     <!-- 结算 -->
     <SettleModal />
+
+    <!-- 房间号大字分享弹窗 -->
+    <transition name="fade">
+      <div v-if="shareOpen" class="share-overlay" @click="shareOpen = false">
+        <div class="share-card gold-border" @click.stop>
+          <div class="share-title">房间配对码</div>
+          <div class="share-code">{{ code.toUpperCase() }}</div>
+          <div class="share-game">{{ room?.gameLabel ?? '' }}</div>
+          <div class="share-hint">把配对码告诉朋友，对方在首页输入即可加入</div>
+          <div class="share-actions">
+            <button class="btn btn-ghost" @click="shareOpen = false">关闭</button>
+            <button class="btn btn-gold" @click="copyAndCloseShare">{{ copied ? '✓ 已复制' : '复制配对码' }}</button>
+          </div>
+        </div>
+      </div>
+    </transition>
     <!-- 错误提示统一由 App.vue 全局渲染，避免重复 -->
   </div>
 </template>
@@ -912,6 +964,66 @@ onUnmounted(() => {
   font-weight: 700;
 }
 
+/* ===== 房间号分享弹窗 ===== */
+.clickable-code {
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+.clickable-code:hover {
+  color: var(--gold-soft);
+  text-decoration: underline;
+}
+.share-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(3, 12, 8, 0.8);
+  backdrop-filter: blur(6px);
+  padding: 1rem;
+}
+.share-card {
+  border-radius: 20px;
+  padding: 2rem 2.5rem;
+  text-align: center;
+  max-width: 90vw;
+}
+.share-title {
+  font-size: 0.85rem;
+  color: var(--ivory-dim);
+  letter-spacing: 0.2em;
+  margin-bottom: 0.5rem;
+}
+.share-code {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(3rem, 12vw, 5.5rem);
+  letter-spacing: 0.25em;
+  color: var(--gold);
+  text-shadow: 0 0 24px var(--gold-glow);
+  margin: 0.5rem 0;
+  line-height: 1.1;
+}
+.share-game {
+  font-family: var(--font-zh);
+  font-weight: 700;
+  color: var(--gold-soft);
+  font-size: 1.1rem;
+  margin-bottom: 1rem;
+}
+.share-hint {
+  font-size: 0.82rem;
+  color: var(--ivory-dim);
+  margin-bottom: 1.5rem;
+}
+.share-actions {
+  display: flex;
+  gap: 0.8rem;
+  justify-content: center;
+}
+
 /* ===== 过渡 ===== */
 .fade-enter-active,
 .fade-leave-active {
@@ -931,6 +1043,52 @@ onUnmounted(() => {
 }
 
 /* ===== 响应式 ===== */
+/* 安全区：iPhone 刘海/底部 home indicator 不遮挡内容 */
+@supports (padding: max(0px)) {
+  .room-header {
+    padding-left: max(1.1rem, env(safe-area-inset-left));
+    padding-right: max(1.1rem, env(safe-area-inset-right));
+    padding-top: max(0.7rem, env(safe-area-inset-top));
+  }
+  .my-area {
+    padding-bottom: max(0.8rem, env(safe-area-inset-bottom));
+  }
+}
+
+/* 横屏翻转按钮 */
+.icon-btn {
+  padding: 0.45rem 0.6rem;
+  font-size: 1.1rem;
+  line-height: 1;
+  min-width: 40px;
+  min-height: 40px;
+}
+.icon-btn.active {
+  background: linear-gradient(135deg, var(--gold-soft), var(--gold));
+  color: var(--ink);
+  border-color: var(--gold);
+}
+
+/* 横屏翻转：竖屏锁定时旋转整个房间视图
+   原理：旋转 90° 后宽高互换，用 100vh 作宽、100vw 作高，origin 居中 */
+.room-page.landscape-rotate {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vh;
+  height: 100vw;
+  transform: rotate(90deg) translateY(-100vw);
+  transform-origin: top left;
+  z-index: 1000;
+}
+/* 翻转模式下内部布局按横屏（宽屏）优化 */
+.room-page.landscape-rotate .chat-sidebar {
+  display: flex;
+}
+.room-page.landscape-rotate .chat-fab {
+  display: none;
+}
+
 @media (max-width: 900px) {
   .chat-sidebar {
     display: none;
@@ -953,6 +1111,11 @@ onUnmounted(() => {
   .leave-btn {
     padding: 0.4rem 0.7rem;
     font-size: 0.78rem;
+    min-height: 40px;
+  }
+  .chat-fab {
+    min-width: 40px;
+    min-height: 40px;
   }
   .table-wrap {
     padding: 0.5rem;
@@ -980,6 +1143,11 @@ onUnmounted(() => {
   .public-area {
     min-width: 120px;
   }
+  /* 触摸目标 ≥ 40px，避免误触 */
+  .copy-btn {
+    padding: 0.3rem 0.6rem;
+    font-size: 0.72rem;
+  }
 }
 
 @media (max-width: 480px) {
@@ -991,6 +1159,23 @@ onUnmounted(() => {
   }
   .pot-coin {
     font-size: 1.4rem;
+  }
+  /* 超窄屏：缩小头部信息密度 */
+  .room-header {
+    padding: 0.4rem 0.5rem;
+    gap: 0.5rem;
+  }
+  .game-icon {
+    font-size: 1.3rem;
+  }
+  .game-name {
+    font-size: 0.82rem;
+  }
+  .code-label {
+    display: none;
+  }
+  .code-value {
+    font-size: 0.85rem;
   }
 }
 </style>

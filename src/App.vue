@@ -1,10 +1,15 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { onMounted, onUnmounted } from 'vue'
 import { useGameStore } from '@/stores/game'
 
 const store = useGameStore()
 onMounted(() => {
   store.connect().catch(() => {})
+  // 监听可见性变化：切后台回前台时主动检测/重连
+  document.addEventListener('visibilitychange', store.handleVisibilityChange)
+})
+onUnmounted(() => {
+  document.removeEventListener('visibilitychange', store.handleVisibilityChange)
 })
 </script>
 

@@ -55,7 +55,8 @@ export const useGameStore = defineStore('game', () => {
   function showError(msg: string) {
     errorToast.value = msg
     if (errorTimer) clearTimeout(errorTimer)
-    errorTimer = setTimeout(() => (errorToast.value = ''), 2600)
+    // 移动端/弱网用户阅读需更长时间，3.5s
+    errorTimer = setTimeout(() => (errorToast.value = ''), 3500)
   }
 
   function startHeartbeat() {
@@ -69,6 +70,24 @@ export const useGameStore = defineStore('game', () => {
   }
   function stopHeartbeat() {
     if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null }
+  }
+
+  // 可见性变化：移动端切后台/锁屏时浏览器会节流/暂停定时器与 WebSocket
+  // 回前台时主动检测连接状态，断线则立即重连，避免用户回来看到"卡住"
+  function handleVisibilityChange() {
+    if (document.hidden) return
+    // 回前台：若在房间内但连接已断，立即触发重连（不等下一次心跳超时）
+    if (joinedCode && !intentionalClose) {
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        // 重置重连计数，给回前台用户一次新的重连机会
+        reconnectAttempts = 0
+        failed.value = false
+        scheduleReconnect()
+      } else {
+        // 连接仍在：补发一次心跳快速检测健康度
+        send('ping', {})
+      }
+    }
   }
 
   // 断线自动重连：递增退避 + jitter，重连成功后自动重新 joinRoom 夺回座位
@@ -376,5 +395,6 @@ export const useGameStore = defineStore('game', () => {
     leaveRoom,
     seatName,
     kickSeat,
+    handleVisibilityChange,
   }
 })
