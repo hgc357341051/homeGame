@@ -12,6 +12,14 @@ dist
 dist-ssr
 *.local
 
+# 编译产物
+server/familycards
+
+# 包管理器缓存
+.pnpm-store/
+.pnpm-store
+.vite
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

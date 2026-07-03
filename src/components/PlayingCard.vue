@@ -18,6 +18,7 @@ const props = withDefaults(
 const isJoker = computed(() => props.card && (props.card.rank === '小王' || props.card.rank === '大王'))
 const isBigJoker = computed(() => props.card?.rank === '大王')
 const red = computed(() => (props.card ? isRedSuit(props.card.suit) || props.card.rank === '大王' : false))
+const isUnknown = computed(() => !props.card || props.card.rank === '?')
 
 const sizeMap = {
   xs: { w: 38, h: 54, fs: 13, big: 18 },
@@ -38,11 +39,11 @@ const rankDisplay = computed(() => {
 <template>
   <div
     class="pc"
-    :class="{ selected, dim, highlight, 'face-down': faceDown }"
+    :class="{ selected, dim, highlight, 'face-down': faceDown || isUnknown }"
     :style="{ width: s.w + 'px', height: s.h + 'px' }"
   >
     <!-- 卡背 -->
-    <div v-if="faceDown" class="back">
+    <div v-if="faceDown || isUnknown" class="back">
       <div class="back-pattern" />
       <div class="back-emblem">♠</div>
     </div>

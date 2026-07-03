@@ -26,23 +26,26 @@ type PlayInfo struct {
 
 // 房间状态中的座位（公开视角，绝不含手牌）
 type SeatView struct {
-	Seat        int    `json:"seat"`
-	PlayerID    string `json:"playerId"`
-	Name        string `json:"name"`
-	Avatar      string `json:"avatar"`
-	Chips       int    `json:"chips"`
-	Ready       bool   `json:"ready"`
-	CardCount   int    `json:"cardCount"`
-	IsLandlord  bool   `json:"isLandlord,omitempty"`
-	IsDealer    bool   `json:"isDealer,omitempty"`
-	IsFolded    bool   `json:"isFolded,omitempty"`
-	IsLooked    bool   `json:"isLooked,omitempty"`
-	IsOwner     bool   `json:"isOwner,omitempty"`
-	Online      bool   `json:"online"`
-	CurrentBet  int    `json:"currentBet,omitempty"`
-	HasNiu      bool   `json:"hasNiu,omitempty"`
-	NiuValue    int    `json:"niuValue,omitempty"`
-	SettledDelta int   `json:"settledDelta,omitempty"`
+	Seat         int    `json:"seat"`
+	PlayerID     string `json:"playerId"`
+	Name         string `json:"name"`
+	Avatar       string `json:"avatar"`
+	Chips        int    `json:"chips"`
+	Ready        bool   `json:"ready"`
+	CardCount    int    `json:"cardCount"`
+	IsLandlord   bool   `json:"isLandlord,omitempty"`
+	IsDealer     bool   `json:"isDealer,omitempty"`
+	IsFolded     bool   `json:"isFolded,omitempty"`
+	IsLooked     bool   `json:"isLooked,omitempty"`
+	IsOwner      bool   `json:"isOwner,omitempty"`
+	Online       bool   `json:"online"`
+	CurrentBet   int    `json:"currentBet,omitempty"`
+	HasNiu       bool   `json:"hasNiu,omitempty"`
+	NiuValue     int    `json:"niuValue,omitempty"`
+	SettledDelta int    `json:"settledDelta,omitempty"`
+	LookedIndices []bool `json:"lookedIndices,omitempty"` // 蒙牌模式：已查看的牌索引
+	IsRevealed   bool   `json:"isRevealed"`               // 蒙牌模式：是否已开牌
+	RevealedCards []Card `json:"revealedCards,omitempty"`  // 开牌后该座位全部牌（所有人可见）
 }
 
 // 广播的房间状态（不含任何手牌；个人手牌由 deal 单独下发）
@@ -57,6 +60,7 @@ type RoomStateView struct {
 	MinPlayers  int            `json:"minPlayers"`
 	MaxPlayers  int            `json:"maxPlayers"`
 	GameLabel   string         `json:"gameLabel"`
+	BlindMode   bool           `json:"blindMode,omitempty"`
 }
 
 type PublicAreaView struct {

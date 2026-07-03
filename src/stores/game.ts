@@ -18,7 +18,7 @@ export const useGameStore = defineStore('game', () => {
   const room = ref<RoomState | null>(null)
   const myHand = ref<Card[]>([])
   const chat = ref<ChatMsg[]>([])
-  const turn = ref<{ seat: number; phase: string; actions: string[]; currentBet?: number; pot?: number; callCost?: number } | null>(null)
+  const turn = ref<{ seat: number; phase: string; actions: string[]; currentBet?: number; pot?: number; callCost?: number; blindMode?: boolean } | null>(null)
   const phaseMsg = ref<string>('')
   const log = ref<{ id: number; text: string; kind: string }[]>([])
   const reveal = ref<any>(null)
@@ -119,7 +119,24 @@ export const useGameStore = defineStore('game', () => {
         room.value = d
         break
       case 'deal':
-        myHand.value = d.cards || []
+        if (d.blindMode && d.cardCount && !d.cards) {
+          // 蒙牌模式：初始化占位手牌（牌面朝下）
+          myHand.value = Array.from({ length: d.cardCount }, () => ({ suit: '', rank: '?', value: 0 }))
+        } else if (d.blindMode && d.cards && d.index !== undefined) {
+          // 蒙牌模式：逐张看牌，更新指定位置
+          const idx = d.index as number
+          if (myHand.value[idx]) {
+            myHand.value[idx] = (d.cards as Card[])[0]
+            myHand.value = [...myHand.value]
+          }
+        } else if (d.blindMode && d.cards && d.lookedIndices) {
+          // 蒙牌模式：状态刷新（重连），已查看位置有牌值，未查看为零值占位
+          const cards = d.cards as Card[]
+          const looked = d.lookedIndices as boolean[]
+          myHand.value = cards.map((c, i) => looked[i] ? c : { suit: '', rank: '?', value: 0 })
+        } else {
+          myHand.value = d.cards || []
+        }
         break
       case 'turn':
         turn.value = d
@@ -130,6 +147,7 @@ export const useGameStore = defineStore('game', () => {
           pushLog(d.message, d.phase || 'info')
         }
         if (d.event === 'look') pushLog(`${d.name} 看牌`, 'event')
+        if (d.event === 'lookCard') pushLog(`${d.name} 查看第${(d.index ?? 0) + 1}张牌`, 'event')
         if (d.event === 'fold') pushLog(`${d.name} 弃牌`, 'event')
         if (d.event === 'call') pushLog(`${d.name} 跟注 ${d.amount}`, 'event')
         if (d.event === 'raise') pushLog(`${d.name} 加注到 ${d.currentBet} (付 ${d.amount})`, 'event')
@@ -146,7 +164,7 @@ export const useGameStore = defineStore('game', () => {
         settle.value = { ...d, ts: Date.now() }
         break
       case 'chat':
-        chat.value.push({ player: d.player, text: d.text, ts: Date.now() })
+        chat.value.push({ player: d.player, text: d.text, ts: Date.now(), system: d.system })
         if (chat.value.length > 100) chat.value.shift()
         break
       case 'error':

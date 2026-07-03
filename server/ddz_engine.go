@@ -22,6 +22,11 @@ func (e *ddzEngine) Label() string { return "斗地主" }
 func (e *ddzEngine) MinPlayers() int { return 3 }
 func (e *ddzEngine) MaxPlayers() int { return 3 }
 
+// PlayerHand 斗地主无蒙牌概念，始终返回完整手牌
+func (e *ddzEngine) PlayerHand(s *Seat) []Card {
+	return s.Hand
+}
+
 func (e *ddzEngine) reset() {
 	*e = ddzEngine{baseScore: 2, multiplier: 1}
 }

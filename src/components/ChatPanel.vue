@@ -20,7 +20,10 @@ function sendQuick(q: string) {
 
 const items = computed(() => {
   // 合并聊天与事件日志，按时间排序展示
-  const chatItems = store.chat.map((c) => ({ kind: 'chat' as const, ts: c.ts, player: c.player, text: c.text }))
+  const chatItems = store.chat.map((c) => ({
+    kind: c.system ? ('system' as const) : ('chat' as const),
+    ts: c.ts, player: c.player, text: c.text
+  }))
   const logItems = store.log.map((l) => ({ kind: 'log' as const, ts: l.id, player: '', text: l.text }))
   return [...chatItems, ...logItems].sort((a, b) => a.ts - b.ts)
 })
@@ -44,6 +47,9 @@ watch(
         <template v-if="it.kind === 'chat'">
           <span class="who">{{ it.player }}</span>
           <span class="msg">{{ it.text }}</span>
+        </template>
+        <template v-else-if="it.kind === 'system'">
+          <span class="sys">{{ it.text }}</span>
         </template>
         <template v-else>
           <span class="log">· {{ it.text }}</span>
@@ -107,6 +113,17 @@ watch(
 .item.log .log {
   color: var(--muted);
   font-size: 0.76rem;
+}
+.item.system {
+  text-align: center;
+}
+.item.system .sys {
+  color: var(--gold-soft);
+  font-size: 0.74rem;
+  opacity: 0.7;
+  background: rgba(212, 175, 55, 0.08);
+  padding: 0.15rem 0.6rem;
+  border-radius: 8px;
 }
 .empty {
   color: var(--muted);

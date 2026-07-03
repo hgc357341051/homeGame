@@ -170,5 +170,6 @@ func (rm *RoomManager) joinRoom(c *Client, data ActionData) {
 	room.Spectators = append(room.Spectators, c)
 	room.mu.Unlock()
 	c.sendMsg(Message{Type: "joined", Data: ActionData{"code": code}})
+	room.systemChat(c.name + " 加入了房间")
 	room.broadcastState()
 }

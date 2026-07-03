@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import type { Card, SeatView } from '@/types'
 import { useGameStore } from '@/stores/game'
 
@@ -19,11 +19,26 @@ const readyCount = computed(() => {
 })
 const canStart = computed(() => readyCount.value >= (room.value?.minPlayers ?? 99))
 
+// 蒙牌模式开关（仅炸金花，房主在等待阶段设置）
+const blindMode = ref(false)
+// 从房间状态同步蒙牌模式
+watch(() => room.value?.blindMode, (v) => { blindMode.value = !!v }, { immediate: true })
+function toggleBlindMode() {
+  blindMode.value = !blindMode.value
+  store.send('setBlindMode', { blindMode: blindMode.value })
+}
+
 // 炸金花比牌目标选择
 const pickingCompare = ref(false)
 const compareTargets = computed<SeatView[]>(() => {
   if (!room.value || room.value.game !== 'zjh') return []
   return room.value.seats.filter((s) => s.playerId && !s.isFolded && s.seat !== room.value!.mySeat)
+})
+
+// 蒙牌模式下未查看的牌索引
+const unlookedIndices = computed(() => {
+  if (!mySeat.value?.lookedIndices) return []
+  return mySeat.value.lookedIndices.map((looked, i) => ({ i, looked })).filter(x => !x.looked).map(x => x.i)
 })
 
 function act(type: string, data: any = {}) {
@@ -50,6 +65,12 @@ function pass() {
 }
 function look() {
   act('look')
+}
+function lookCard(index: number) {
+  act('lookCard', { index })
+}
+function reveal() {
+  act('reveal')
 }
 function callBet() {
   act('call')
@@ -79,11 +100,16 @@ function niuniuConfirm() {
     <template v-if="phase === 'waiting'">
       <button v-if="mySeat && !mySeat.ready" class="btn btn-gold" @click="ready">准备</button>
       <button v-if="mySeat && mySeat.ready" class="btn btn-ghost" @click="ready">取消准备</button>
+      <!-- 炸金花蒙牌模式开关（仅房主） -->
+      <label v-if="isOwner && room?.game === 'zjh'" class="blind-toggle">
+        <input type="checkbox" v-model="blindMode" @change="toggleBlindMode" />
+        <span>蒙牌模式</span>
+      </label>
       <button v-if="isOwner" class="btn btn-gold" :disabled="!canStart" @click="start">
         开局 {{ readyCount }}/{{ room?.minPlayers }}+
       </button>
       <span v-if="!isOwner" class="hint">等待房主开局（已准备 {{ readyCount }} 人）</span>
-      <button v-if="mySeat" class="btn btn-ghost" @click="sit(-1)">离座旁观</button>
+      <button v-if="mySeat" class="btn btn-ghost" @click="act('stand')">离座旁观</button>
     </template>
 
     <!-- 斗地主叫地主 -->
@@ -117,6 +143,19 @@ function niuniuConfirm() {
         <button class="btn btn-ghost" @click="pickingCompare = false">取消</button>
       </template>
       <template v-else>
+        <!-- 蒙牌模式：逐张看牌 + 开牌 -->
+        <template v-if="turn?.blindMode">
+          <button
+            v-for="idx in unlookedIndices"
+            :key="idx"
+            class="btn btn-ghost"
+            @click="lookCard(idx)"
+          >
+            看第{{ idx + 1 }}张
+          </button>
+          <button class="btn btn-ghost" @click="reveal">开牌</button>
+        </template>
+        <!-- 非蒙牌模式：看牌 -->
         <button v-if="turn?.actions?.includes('look')" class="btn btn-ghost" @click="look">看牌</button>
         <button class="btn btn-gold" @click="callBet">跟注 {{ turn?.callCost }}</button>
         <button class="btn btn-ghost" @click="raise">加注</button>
@@ -127,8 +166,16 @@ function niuniuConfirm() {
       </template>
     </template>
 
+    <!-- 牛牛押注阶段 -->
+    <template v-else-if="isMyTurn && room?.game === 'nn' && turn?.phase === 'betting'">
+      <span class="prompt">底池 {{ turn?.pot }} · 当前注 {{ turn?.currentBet }}</span>
+      <button class="btn btn-gold" @click="callBet">跟注 {{ turn?.currentBet }}</button>
+      <button class="btn btn-ghost" @click="raise">加注</button>
+      <button class="btn btn-wine" @click="fold">弃牌</button>
+    </template>
+
     <!-- 牛牛凑牛 -->
-    <template v-else-if="room?.game === 'nn' && phase === 'playing' && mySeat && !mySeat.hasNiu">
+    <template v-else-if="room?.game === 'nn' && phase === 'playing' && turn?.phase === 'setNiu' && mySeat && !mySeat.hasNiu && !mySeat.isFolded">
       <span class="prompt">选 3 张凑牛（或直接确认自动）</span>
       <button class="btn btn-gold" @click="niuniuConfirm">
         确认 {{ selectedCards.length === 3 ? '(已选3张)' : '(自动)' }}
@@ -168,6 +215,18 @@ function niuniuConfirm() {
 .hint {
   color: var(--ivory-dim);
   font-size: 0.85rem;
+}
+.blind-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: var(--ivory-dim);
+  cursor: pointer;
+  user-select: none;
+}
+.blind-toggle input {
+  accent-color: var(--gold);
 }
 @media (max-width: 768px) {
   .action-bar {

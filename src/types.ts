@@ -26,6 +26,9 @@ export interface SeatView {
   hasNiu?: boolean
   niuValue?: number
   settledDelta?: number
+  lookedIndices?: boolean[]
+  isRevealed?: boolean
+  revealedCards?: Card[]
 }
 
 export interface PlayInfo {
@@ -62,12 +65,14 @@ export interface RoomState {
   minPlayers: number
   maxPlayers: number
   gameLabel: string
+  blindMode?: boolean
 }
 
 export interface ChatMsg {
   player: string
   text: string
   ts: number
+  system?: boolean
 }
 
 // 服务端 -> 客户端 消息

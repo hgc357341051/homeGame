@@ -87,6 +87,7 @@ type zjhEngine struct {
 	pot         int
 	phase       string // betting / settled
 	activeCount int
+	blindMode   bool // 蒙牌模式开关
 }
 
 func (e *zjhEngine) Name() string    { return "zjh" }
@@ -96,6 +97,22 @@ func (e *zjhEngine) MaxPlayers() int { return 6 }
 
 func (e *zjhEngine) reset() {
 	*e = zjhEngine{baseBet: 2, currentBet: 2, cap: 32}
+	// blindMode 默认 false（不蒙牌）；由 Start 从 Room 读取覆盖
+}
+
+// PlayerHand 返回该玩家当前可看到的手牌
+// 蒙牌模式下未开牌时返回完整长度数组，未查看的位置为零值占位
+func (e *zjhEngine) PlayerHand(s *Seat) []Card {
+	if !e.blindMode || s.IsRevealed {
+		return s.Hand
+	}
+	out := make([]Card, len(s.Hand))
+	for i, looked := range s.LookedIndices {
+		if looked && i < len(s.Hand) {
+			out[i] = s.Hand[i]
+		}
+	}
+	return out
 }
 
 func (e *zjhEngine) idxOf(seat int) int {
@@ -128,21 +145,45 @@ func (e *zjhEngine) turnEvent(r *Room) Event {
 	seatIdx := e.occupied[e.currentSeat]
 	seat := r.Seats[seatIdx]
 	actions := []string{"call", "raise", "fold"}
-	if !seat.IsLooked {
-		actions = append([]string{"look"}, actions...)
-	}
-	if seat.IsLooked && len(e.activeSeats(r)) >= 2 {
-		actions = append(actions, "compare")
+	if e.blindMode {
+		// 蒙牌模式：提供 lookCard（仍有未看的牌时）和 reveal
+		hasUnlooked := false
+		for _, looked := range seat.LookedIndices {
+			if !looked {
+				hasUnlooked = true
+				break
+			}
+		}
+		if hasUnlooked {
+			actions = append([]string{"lookCard"}, actions...)
+		}
+		actions = append(actions, "reveal")
+		// 全部牌都已查看视为已看牌（用于 callCost 翻倍与 compare）
+		if !hasUnlooked && len(seat.LookedIndices) > 0 {
+			seat.IsLooked = true
+		}
+		if seat.IsLooked && len(e.activeSeats(r)) >= 2 {
+			actions = append(actions, "compare")
+		}
+	} else {
+		if !seat.IsLooked {
+			actions = append([]string{"look"}, actions...)
+		}
+		if seat.IsLooked && len(e.activeSeats(r)) >= 2 {
+			actions = append(actions, "compare")
+		}
 	}
 	return Event{Type: "turn", Data: ActionData{
 		"seat": seatIdx, "phase": "betting", "actions": actions,
 		"currentBet": e.currentBet, "pot": e.pot,
-		"callCost": e.callCost(seat),
+		"callCost":  e.callCost(seat),
+		"blindMode": e.blindMode,
 	}, Target: -1}
 }
 
 func (e *zjhEngine) Start(r *Room) []Event {
 	e.reset()
+	e.blindMode = r.BlindMode
 	e.occupied = nil
 	for _, s := range r.Seats {
 		if s.occupied() {
@@ -159,13 +200,25 @@ func (e *zjhEngine) Start(r *Room) []Event {
 		r.Seats[seatIdx].Chips -= e.baseBet
 		r.Seats[seatIdx].CurrentBet = e.baseBet
 		e.pot += e.baseBet
-		evs = append(evs, Event{Type: "deal", Data: ActionData{"cards": r.Seats[seatIdx].Hand}, Target: seatIdx})
+		if e.blindMode {
+			// 蒙牌模式：初始化 LookedIndices，发牌事件不发送实际牌值
+			r.Seats[seatIdx].LookedIndices = []bool{false, false, false}
+			r.Seats[seatIdx].IsRevealed = false
+			evs = append(evs, Event{Type: "deal", Data: ActionData{"cardCount": 3, "blindMode": true}, Target: seatIdx})
+		} else {
+			evs = append(evs, Event{Type: "deal", Data: ActionData{"cards": r.Seats[seatIdx].Hand}, Target: seatIdx})
+		}
 	}
 	e.currentSeat = r.rnd.Intn(len(e.occupied))
 	e.phase = "betting"
+	msg := "下注阶段：看牌/跟注/加注/弃牌/比牌"
+	if e.blindMode {
+		msg = "蒙牌模式：逐张看牌/开牌/跟注/加注/弃牌/比牌"
+	}
 	evs = append(evs, Event{Type: "phase", Data: ActionData{
-		"phase": "betting", "message": "下注阶段：看牌/跟注/加注/弃牌/比牌",
+		"phase": "betting", "message": msg,
 		"currentBet": e.currentBet, "pot": e.pot,
+		"blindMode": e.blindMode,
 	}, Target: -1})
 	evs = append(evs, e.turnEvent(r))
 	return evs
@@ -191,6 +244,9 @@ func (e *zjhEngine) HandleAction(r *Room, seat int, action string, data ActionDa
 	s := r.Seats[seat]
 	switch action {
 	case "look":
+		if e.blindMode {
+			return []Event{{Type: "error", Data: ActionData{"msg": "蒙牌模式请使用 lookCard"}, Target: seat}}
+		}
 		if s.IsLooked {
 			return []Event{{Type: "error", Data: ActionData{"msg": "已经看牌"}, Target: seat}}
 		}
@@ -200,6 +256,59 @@ func (e *zjhEngine) HandleAction(r *Room, seat int, action string, data ActionDa
 		}
 		// 看牌不消耗轮次？规则上仍轮到下一家。这里看牌后直接轮转
 		e.nextActive(r)
+		return append(evs, e.turnEvent(r))
+	case "lookCard":
+		// 蒙牌模式：逐张看牌。不消耗轮次，玩家可连续看多张后再 call/raise/fold/reveal
+		if !e.blindMode {
+			return []Event{{Type: "error", Data: ActionData{"msg": "非蒙牌模式"}, Target: seat}}
+		}
+		index := -1
+		if v, ok := data["index"].(float64); ok {
+			index = int(v)
+		}
+		if index < 0 || index >= len(s.LookedIndices) || index >= len(s.Hand) {
+			return []Event{{Type: "error", Data: ActionData{"msg": "无效的牌索引"}, Target: seat}}
+		}
+		if s.LookedIndices[index] {
+			return []Event{{Type: "error", Data: ActionData{"msg": "已查看该牌"}, Target: seat}}
+		}
+		s.LookedIndices[index] = true
+		// 全部牌都已查看视为已看牌
+		allLooked := true
+		for _, looked := range s.LookedIndices {
+			if !looked {
+				allLooked = false
+				break
+			}
+		}
+		if allLooked {
+			s.IsLooked = true
+		}
+		// 定向发送该张牌给该玩家；广播通知（不带牌面）
+		evs := []Event{
+			{Type: "deal", Data: ActionData{"cards": []Card{s.Hand[index]}, "index": index, "blindMode": true}, Target: seat},
+			{Type: "phase", Data: ActionData{"event": "lookCard", "seat": seat, "name": s.Name, "index": index}, Target: -1},
+		}
+		// 不消耗轮次：重新发 turn 让该玩家继续操作
+		return append(evs, e.turnEvent(r))
+	case "reveal":
+		// 蒙牌模式：开牌，向所有人展示该玩家全部牌。不消耗轮次
+		if !e.blindMode {
+			return []Event{{Type: "error", Data: ActionData{"msg": "非蒙牌模式"}, Target: seat}}
+		}
+		if s.IsRevealed {
+			return []Event{{Type: "error", Data: ActionData{"msg": "已开牌"}, Target: seat}}
+		}
+		s.IsRevealed = true
+		s.IsLooked = true // 开牌后视为已看牌
+		evs := []Event{{
+			Type: "reveal",
+			Data: ActionData{
+				"event": "reveal", "seat": seat, "name": s.Name, "cards": s.Hand,
+			},
+			Target: -1,
+		}}
+		// 不消耗轮次：重新发 turn 让该玩家继续操作
 		return append(evs, e.turnEvent(r))
 	case "fold":
 		s.IsFolded = true

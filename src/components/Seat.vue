@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { SeatView } from '@/types'
+import { useGameStore } from '@/stores/game'
 
 const props = defineProps<{
   seat: SeatView
@@ -10,6 +11,8 @@ const props = defineProps<{
   compact?: boolean
 }>()
 
+const store = useGameStore()
+
 const statusBadge = computed(() => {
   if (props.seat.isFolded) return { text: '弃牌', cls: 'folded' }
   if (props.seat.isLandlord) return { text: '地主', cls: 'landlord' }
@@ -18,6 +21,14 @@ const statusBadge = computed(() => {
 })
 
 const empty = computed(() => !props.seat.playerId)
+
+function renameSeat() {
+  if (empty.value) return
+  const newName = window.prompt('修改昵称', props.seat.name)
+  if (newName && newName.trim()) {
+    store.send('rename', { seat: props.seat.seat, name: newName.trim() })
+  }
+}
 </script>
 
 <template>
@@ -30,10 +41,14 @@ const empty = computed(() => !props.seat.playerId)
 
     <div class="info" v-if="!empty">
       <div class="name-line">
-        <span class="name">{{ seat.name }}</span>
+        <span class="name clickable" @click="renameSeat" title="点击修改昵称">{{ seat.name }}</span>
         <span class="owner-tag" v-if="seat.isOwner">房主</span>
         <span class="badge" :class="statusBadge.cls" v-if="statusBadge">{{ statusBadge.text }}</span>
         <span class="badge looked" v-if="seat.isLooked && !seat.isFolded">看牌</span>
+        <span class="badge revealed" v-if="seat.isRevealed">已开牌</span>
+        <span class="badge looking" v-if="seat.lookedIndices && !seat.isRevealed && !seat.isFolded">
+          看{{ seat.lookedIndices.filter(Boolean).length }}/{{ seat.lookedIndices.length }}
+        </span>
       </div>
       <div class="meta">
         <span class="chip">🪙 {{ seat.chips }}</span>
@@ -131,6 +146,13 @@ const empty = computed(() => !props.seat.playerId)
   text-overflow: ellipsis;
   max-width: 90px;
 }
+.name.clickable {
+  cursor: pointer;
+  text-decoration: underline dotted rgba(212, 175, 55, 0.4);
+}
+.name.clickable:hover {
+  color: var(--gold-soft);
+}
 .owner-tag {
   font-size: 0.62rem;
   padding: 0.05rem 0.35rem;
@@ -161,6 +183,16 @@ const empty = computed(() => !props.seat.playerId)
   background: rgba(46, 125, 91, 0.4);
   color: #9fe3c4;
   border: 1px solid rgba(46, 125, 91, 0.6);
+}
+.badge.revealed {
+  background: rgba(212, 175, 55, 0.3);
+  color: var(--gold-soft);
+  border: 1px solid var(--gold);
+}
+.badge.looking {
+  background: rgba(139, 38, 53, 0.3);
+  color: #ffb38a;
+  border: 1px solid rgba(139, 38, 53, 0.5);
 }
 .meta {
   display: flex;

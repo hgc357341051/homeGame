@@ -35,9 +35,9 @@ const mySeatView = computed(() => {
 
 const isMyTurn = computed(() => store.isMyTurn && phase.value === 'playing')
 const canSelectCards = computed(() => {
-  if (!isMyTurn.value && !(game.value === 'nn' && phase.value === 'playing' && mySeatView.value && !mySeatView.value.hasNiu)) return false
+  if (!isMyTurn.value && !(game.value === 'nn' && store.turn?.phase === 'setNiu' && mySeatView.value && !mySeatView.value.hasNiu)) return false
   if (game.value === 'ddz' && store.turn?.phase === 'playing') return true
-  if (game.value === 'nn' && phase.value === 'playing' && mySeatView.value && !mySeatView.value.hasNiu) return true
+  if (game.value === 'nn' && store.turn?.phase === 'setNiu' && mySeatView.value && !mySeatView.value.hasNiu) return true
   return false
 })
 const maxSelect = computed(() => (game.value === 'nn' ? 3 : 0))

@@ -2,6 +2,7 @@ package main
 
 import (
 	"math/rand"
+	"strings"
 	"sync"
 	"time"
 )
@@ -10,22 +11,24 @@ const startChips = 1000
 
 // Seat 表示房间中的一个座位。Hand 仅存在于服务端内存。
 type Seat struct {
-	Index       int
-	Client      *Client // nil 表示空座
-	Name        string
-	PlayerID    string
-	Chips       int
-	Ready       bool
-	Hand        []Card // 仅服务端可见，永不下发
-	IsLandlord  bool
-	IsDealer    bool
-	IsFolded    bool
-	IsLooked    bool
-	CurrentBet  int
-	HasNiu      bool
-	NiuValue    int
-	NiuCards    []Card // 凑牛的 3 张
-	SettledDelta int
+	Index         int
+	Client        *Client // nil 表示空座
+	Name          string
+	PlayerID      string
+	Chips         int
+	Ready         bool
+	Hand          []Card // 仅服务端可见，永不下发
+	IsLandlord    bool
+	IsDealer      bool
+	IsFolded      bool
+	IsLooked      bool
+	CurrentBet    int
+	HasNiu        bool
+	NiuValue      int
+	NiuCards      []Card // 凑牛的 3 张
+	SettledDelta  int
+	LookedIndices []bool // 蒙牌模式下已查看的牌索引
+	IsRevealed    bool   // 蒙牌模式下是否已开牌(向所有人展示)
 }
 
 func (s *Seat) occupied() bool { return s.Client != nil }
@@ -39,6 +42,8 @@ type GameEngine interface {
 	Start(r *Room) []Event
 	HandleAction(r *Room, seat int, action string, data ActionData) []Event
 	PublicArea(r *Room) PublicAreaView
+	// PlayerHand 返回该玩家当前可看到的手牌（蒙牌模式下仅为已查看的牌）
+	PlayerHand(s *Seat) []Card
 }
 
 // Room 一个游戏房间
@@ -50,6 +55,7 @@ type Room struct {
 	Seats      []*Seat
 	Spectators []*Client
 	Engine     GameEngine
+	BlindMode  bool // 炸金花蒙牌模式开关（房主开局前设置）
 	rnd        *rand.Rand
 	mu         sync.Mutex
 	createdAt  time.Time
@@ -130,7 +136,14 @@ func (r *Room) broadcastState() {
 		}
 		s.Client.sendMsg(Message{Type: "roomState", Data: r.viewFor(s.Client)})
 		if r.Phase == "playing" {
-			s.Client.sendMsg(Message{Type: "deal", Data: ActionData{"cards": s.Hand}})
+			// 蒙牌模式下由引擎按可见性返回；其他模式即返回完整手牌
+			hand := r.Engine.PlayerHand(s)
+			dealData := ActionData{"cards": hand}
+			if r.BlindMode {
+				dealData["blindMode"] = true
+				dealData["lookedIndices"] = s.LookedIndices
+			}
+			s.Client.sendMsg(Message{Type: "deal", Data: dealData})
 		}
 	}
 	for _, c := range r.Spectators {
@@ -155,6 +168,15 @@ func (r *Room) viewFor(c *Client) RoomStateView {
 			HasNiu:       s.HasNiu,
 			NiuValue:     s.NiuValue,
 			SettledDelta: s.SettledDelta,
+			IsRevealed:   s.IsRevealed,
+		}
+		// 蒙牌模式下，LookedIndices 总是下发，让其他玩家看到谁在看第几张
+		if s.LookedIndices != nil {
+			sv.LookedIndices = append([]bool{}, s.LookedIndices...)
+		}
+		// 已开牌：在 SeatView 中包含 RevealedCards（该座位的 Hand），所有人可见
+		if s.IsRevealed && len(s.Hand) > 0 {
+			sv.RevealedCards = append([]Card{}, s.Hand...)
 		}
 		// 已分配座位（含临时断线）均展示信息；断线时 online=false
 		if s.PlayerID != "" {
@@ -184,12 +206,13 @@ func (r *Room) viewFor(c *Client) RoomStateView {
 		MinPlayers: r.Engine.MinPlayers(),
 		MaxPlayers: r.Engine.MaxPlayers(),
 		GameLabel:  r.Engine.Label(),
+		BlindMode:  r.BlindMode,
 	}
 }
 
 func (r *Room) handleDisconnect(c *Client) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	leaveName := c.name
 	// 旁观者移除
 	for i, sp := range r.Spectators {
 		if sp == c {
@@ -209,6 +232,10 @@ func (r *Room) handleDisconnect(c *Client) {
 		}
 	}
 	r.broadcastStateAsync()
+	r.mu.Unlock()
+	if leaveName != "" {
+		r.systemChat(leaveName + " 离开了房间")
+	}
 }
 
 // 由于 handleDisconnect 已持有锁，这里用无锁版本广播
@@ -255,6 +282,14 @@ func (r *Room) applyAction(c *Client, action string, data ActionData) {
 		r.mu.Unlock()
 		r.handleChat(c, data)
 		return
+	case "rename":
+		r.mu.Unlock()
+		r.handleRename(c, data)
+		return
+	case "setBlindMode":
+		r.mu.Unlock()
+		r.handleSetBlindMode(c, data)
+		return
 	}
 
 	if r.Phase != "playing" {
@@ -266,13 +301,15 @@ func (r *Room) applyAction(c *Client, action string, data ActionData) {
 			r.broadcastState()
 			return
 		case "stand":
+			standName := r.Seats[seat].Name
 			r.standLocked(seat)
 			r.mu.Unlock()
+			r.systemChat(standName + " 离座旁观")
 			r.broadcastState()
 			return
 		case "start":
 			r.mu.Unlock()
-			r.handleStart(c)
+			r.handleStart(c, data)
 			return
 		default:
 			r.mu.Unlock()
@@ -309,6 +346,8 @@ func (r *Room) standLocked(seat int) {
 	s.NiuValue = 0
 	s.NiuCards = nil
 	s.SettledDelta = 0
+	s.LookedIndices = nil
+	s.IsRevealed = false
 }
 
 func (r *Room) handleSit(c *Client, data ActionData) {
@@ -346,8 +385,15 @@ func (r *Room) handleSit(c *Client, data ActionData) {
 			break
 		}
 	}
+	seatName := c.name
 	r.mu.Unlock()
+	r.systemChat(seatName + " 入座")
 	r.broadcastState()
+}
+
+// systemChat 广播一条系统消息到聊天框
+func (r *Room) systemChat(text string) {
+	r.broadcast(Event{Type: "chat", Data: ActionData{"player": "系统", "text": text, "system": true}, Target: -1})
 }
 
 func (r *Room) handleChat(c *Client, data ActionData) {
@@ -362,7 +408,56 @@ func (r *Room) handleChat(c *Client, data ActionData) {
 	r.broadcast(Event{Type: "chat", Data: ActionData{"player": name, "text": text}, Target: -1})
 }
 
-func (r *Room) handleStart(c *Client) {
+// handleSetBlindMode 房主设置炸金花蒙牌模式（仅等待阶段）
+func (r *Room) handleSetBlindMode(c *Client, data ActionData) {
+	if c.playerID != r.HostID {
+		c.emitError("仅房主可设置")
+		return
+	}
+	if r.Phase != "waiting" {
+		c.emitError("仅等待阶段可设置")
+		return
+	}
+	if r.Game != "zjh" {
+		c.emitError("仅炸金花支持蒙牌模式")
+		return
+	}
+	if v, ok := data["blindMode"].(bool); ok {
+		r.BlindMode = v
+	}
+	r.broadcastState()
+}
+
+// handleRename 修改指定座位的玩家昵称（可修改自己或他人）
+func (r *Room) handleRename(c *Client, data ActionData) {
+	seatNum := -1
+	if v, ok := data["seat"].(float64); ok {
+		seatNum = int(v)
+	}
+	newName, _ := data["name"].(string)
+	newName = strings.TrimSpace(newName)
+	if newName == "" || len(newName) > 16 {
+		c.emitError("昵称无效（1-16字）")
+		return
+	}
+	r.mu.Lock()
+	if seatNum < 0 || seatNum >= len(r.Seats) || !r.Seats[seatNum].occupied() {
+		r.mu.Unlock()
+		c.emitError("目标座位无效")
+		return
+	}
+	oldName := r.Seats[seatNum].Name
+	r.Seats[seatNum].Name = newName
+	// 同步更新 Client.name 以便后续聊天/断线消息使用
+	if r.Seats[seatNum].Client != nil {
+		r.Seats[seatNum].Client.name = newName
+	}
+	r.mu.Unlock()
+	r.systemChat(oldName + " 改名为 " + newName)
+	r.broadcastState()
+}
+
+func (r *Room) handleStart(c *Client, data ActionData) {
 	r.mu.Lock()
 	if c.playerID != r.HostID {
 		r.mu.Unlock()
@@ -385,6 +480,12 @@ func (r *Room) handleStart(c *Client) {
 		c.emitError("入座且准备的人数不足")
 		return
 	}
+	// 房主可在开局数据中指定蒙牌模式（仅炸金花生效）
+	if v, ok := data["blindMode"].(bool); ok {
+		r.BlindMode = v
+	} else {
+		r.BlindMode = false
+	}
 	// 重置座位对局状态
 	for _, s := range r.Seats {
 		if !s.occupied() {
@@ -400,6 +501,8 @@ func (r *Room) handleStart(c *Client) {
 		s.NiuValue = 0
 		s.NiuCards = nil
 		s.SettledDelta = 0
+		s.LookedIndices = nil
+		s.IsRevealed = false
 	}
 	r.Phase = "playing"
 	evs := r.Engine.Start(r)

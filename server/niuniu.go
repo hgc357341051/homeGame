@@ -199,13 +199,19 @@ func nnName(r nnResult) string {
 // ===== 牛牛引擎 =====
 
 type nnEngine struct {
-	occupied   []int
-	dealerIdx  int // occupied 索引，跨局保留
-	baseBet    int
-	phase      string // setNiu / settled
-	setCount   int
-	results    map[int]nnResult // seat -> 结果
-	totalSeats int
+	occupied       []int
+	dealerIdx      int // occupied 索引，跨局保留
+	baseBet        int
+	currentBet     int // 当前注码（押注阶段会随 raise 增长）
+	pot            int
+	cap            int
+	activeCount    int
+	currentSeat    int // occupied 索引，押注轮到的玩家
+	actedThisRound []bool // 本轮押注中各 occupied 索引是否已行动
+	phase          string // betting / setNiu / settled
+	setCount       int
+	results        map[int]nnResult // seat -> 结果
+	totalSeats     int
 }
 
 func (e *nnEngine) Name() string    { return "nn" }
@@ -213,11 +219,19 @@ func (e *nnEngine) Label() string   { return "牛牛" }
 func (e *nnEngine) MinPlayers() int { return 2 }
 func (e *nnEngine) MaxPlayers() int { return 6 }
 
+// PlayerHand 牛牛无蒙牌概念，始终返回完整手牌
+func (e *nnEngine) PlayerHand(s *Seat) []Card {
+	return s.Hand
+}
+
 func (e *nnEngine) Start(r *Room) []Event {
 	// 保留 dealerIdx 跨局轮转
 	prevDealer := e.dealerIdx
 	e.baseBet = 2
-	e.phase = "setNiu"
+	e.currentBet = e.baseBet
+	e.cap = 32
+	e.pot = 0
+	e.phase = "betting"
 	e.setCount = 0
 	e.results = map[int]nnResult{}
 	e.occupied = nil
@@ -227,6 +241,7 @@ func (e *nnEngine) Start(r *Room) []Event {
 		}
 	}
 	e.totalSeats = len(e.occupied)
+	e.activeCount = e.totalSeats
 	// 庄家轮转
 	if e.totalSeats > 0 {
 		if prevDealer < 0 || prevDealer >= e.totalSeats {
@@ -240,6 +255,7 @@ func (e *nnEngine) Start(r *Room) []Event {
 		r.Seats[seatIdx].HasNiu = false
 		r.Seats[seatIdx].NiuValue = 0
 		r.Seats[seatIdx].NiuCards = nil
+		r.Seats[seatIdx].IsFolded = false
 	}
 	dealerSeat := e.occupied[e.dealerIdx]
 	r.Seats[dealerSeat].IsDealer = true
@@ -250,14 +266,72 @@ func (e *nnEngine) Start(r *Room) []Event {
 		hand := deck[i*5 : (i+1)*5]
 		r.Seats[seatIdx].Hand = append([]Card{}, hand...)
 		sortByValue(r.Seats[seatIdx].Hand)
+		// 扣底注进 pot
+		r.Seats[seatIdx].Chips -= e.baseBet
+		r.Seats[seatIdx].CurrentBet = e.baseBet
+		e.pot += e.baseBet
 		evs = append(evs, Event{Type: "deal", Data: ActionData{"cards": r.Seats[seatIdx].Hand}, Target: seatIdx})
 	}
+	// 押注从庄家下一家开始
+	if e.totalSeats > 0 {
+		e.currentSeat = (e.dealerIdx + 1) % e.totalSeats
+	}
+	e.actedThisRound = make([]bool, e.totalSeats)
 	evs = append(evs, Event{Type: "phase", Data: ActionData{
+		"phase": "betting", "message": "押注阶段：跟注/加注/弃牌",
+		"dealerSeat": dealerSeat,
+		"currentBet": e.currentBet, "pot": e.pot,
+	}, Target: -1})
+	evs = append(evs, e.turnEvent(r))
+	return evs
+}
+
+// turnEvent 押注阶段发送当前玩家的可操作动作
+func (e *nnEngine) turnEvent(r *Room) Event {
+	seatIdx := e.occupied[e.currentSeat]
+	actions := []string{"call", "raise", "fold"}
+	return Event{Type: "turn", Data: ActionData{
+		"seat": seatIdx, "phase": "betting", "actions": actions,
+		"currentBet": e.currentBet, "pot": e.pot,
+	}, Target: -1}
+}
+
+func (e *nnEngine) nextActive(r *Room) {
+	n := len(e.occupied)
+	for i := 0; i < n; i++ {
+		e.currentSeat = (e.currentSeat + 1) % n
+		if !r.Seats[e.occupied[e.currentSeat]].IsFolded {
+			return
+		}
+	}
+}
+
+// bettingRoundComplete 判断本轮押注是否所有活跃玩家都已行动
+func (e *nnEngine) bettingRoundComplete(r *Room) bool {
+	for i := 0; i < e.totalSeats; i++ {
+		s := r.Seats[e.occupied[i]]
+		if !s.IsFolded && !e.actedThisRound[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// enterSetNiu 押注结束，进入凑牛阶段
+func (e *nnEngine) enterSetNiu(r *Room) []Event {
+	e.phase = "setNiu"
+	e.setCount = 0
+	dealerSeat := e.occupied[e.dealerIdx]
+	evs := []Event{Event{Type: "phase", Data: ActionData{
 		"phase": "setNiu", "message": "选择 3 张凑牛（或自动）",
 		"dealerSeat": dealerSeat,
-	}, Target: -1})
-	// 提示所有玩家出 niuniuSet
+		"pot": e.pot, "currentBet": e.currentBet,
+	}, Target: -1}}
+	// 提示所有非弃牌玩家出 niuniuSet
 	for _, seatIdx := range e.occupied {
+		if r.Seats[seatIdx].IsFolded {
+			continue
+		}
 		evs = append(evs, Event{Type: "turn", Data: ActionData{
 			"seat": seatIdx, "phase": "setNiu", "actions": []string{"niuniuSet"},
 		}, Target: -1})
@@ -265,17 +339,147 @@ func (e *nnEngine) Start(r *Room) []Event {
 	return evs
 }
 
-func (e *nnEngine) HandleAction(r *Room, seat int, action string, data ActionData) []Event {
-	if e.phase != "setNiu" {
-		return []Event{{Type: "error", Data: ActionData{"msg": "当前不能操作"}, Target: seat}}
+// advanceBetting 押注行动后推进：若本轮完成则进入 setNiu，否则轮转下一家
+func (e *nnEngine) advanceBetting(r *Room) []Event {
+	if e.bettingRoundComplete(r) {
+		return e.enterSetNiu(r)
 	}
+	e.nextActive(r)
+	return []Event{e.turnEvent(r)}
+}
+
+// settleByFold 仅剩一人时直接结算：剩余玩家赢得底池
+func (e *nnEngine) settleByFold(r *Room) []Event {
+	e.phase = "settled"
+	winner := -1
+	for _, seatIdx := range e.occupied {
+		if !r.Seats[seatIdx].IsFolded {
+			winner = seatIdx
+			break
+		}
+	}
+	evs := []Event{}
+	results := []ActionData{}
+	for _, seatIdx := range e.occupied {
+		s := r.Seats[seatIdx]
+		var d int
+		if seatIdx == winner {
+			d = e.pot - s.CurrentBet
+			s.Chips += e.pot
+		} else {
+			d = -s.CurrentBet
+		}
+		s.SettledDelta = d
+		results = append(results, ActionData{
+			"seat": seatIdx, "name": s.Name, "delta": d, "chips": s.Chips,
+			"isFolded": s.IsFolded, "win": seatIdx == winner,
+		})
+	}
+	e.pot = 0
+	msg := "对局结束"
+	if winner >= 0 {
+		msg = "其他玩家弃牌，" + r.Seats[winner].Name + " 获胜"
+	}
+	evs = append(evs, Event{Type: "settle", Data: ActionData{
+		"results": results, "game": "nn", "winnerSeat": winner,
+	}, Target: -1})
+	evs = append(evs, Event{Type: "phase", Data: ActionData{
+		"phase": "settled", "message": msg,
+	}, Target: -1})
+	r.Phase = "settled"
+	for _, s := range r.Seats {
+		s.Ready = false
+		s.CurrentBet = 0
+	}
+	return evs
+}
+
+func (e *nnEngine) HandleAction(r *Room, seat int, action string, data ActionData) []Event {
+	if e.phase == "betting" {
+		return e.handleBetting(r, seat, action, data)
+	}
+	if e.phase == "setNiu" {
+		return e.handleSetNiu(r, seat, action, data)
+	}
+	return []Event{{Type: "error", Data: ActionData{"msg": "当前不能操作"}, Target: seat}}
+}
+
+// handleBetting 处理押注阶段动作：call/raise/fold
+func (e *nnEngine) handleBetting(r *Room, seat int, action string, data ActionData) []Event {
+	if e.occupied[e.currentSeat] != seat {
+		return []Event{{Type: "error", Data: ActionData{"msg": "还没轮到你"}, Target: seat}}
+	}
+	s := r.Seats[seat]
+	switch action {
+	case "call":
+		cost := e.currentBet
+		if s.Chips < cost {
+			return []Event{{Type: "error", Data: ActionData{"msg": "筹码不足，请弃牌"}, Target: seat}}
+		}
+		s.Chips -= cost
+		s.CurrentBet += cost
+		e.pot += cost
+		e.actedThisRound[e.currentSeat] = true
+		evs := []Event{{Type: "phase", Data: ActionData{
+			"event": "call", "seat": seat, "name": s.Name,
+			"amount": cost, "pot": e.pot, "currentBet": e.currentBet,
+		}, Target: -1}}
+		return append(evs, e.advanceBetting(r)...)
+	case "raise":
+		// 加注：currentBet 翻倍（不超过 cap），加注者需付新注码
+		newBet := e.currentBet * 2
+		if newBet > e.cap {
+			newBet = e.cap
+		}
+		if newBet == e.currentBet {
+			return []Event{{Type: "error", Data: ActionData{"msg": "已达上限，无法加注"}, Target: seat}}
+		}
+		e.currentBet = newBet
+		cost := e.currentBet
+		if s.Chips < cost {
+			e.currentBet = e.currentBet / 2 // 回滚
+			return []Event{{Type: "error", Data: ActionData{"msg": "筹码不足，请弃牌"}, Target: seat}}
+		}
+		s.Chips -= cost
+		s.CurrentBet += cost
+		e.pot += cost
+		// 加注后重置已行动标记，其他活跃玩家需重新行动
+		for i := range e.actedThisRound {
+			e.actedThisRound[i] = false
+		}
+		e.actedThisRound[e.currentSeat] = true
+		evs := []Event{{Type: "phase", Data: ActionData{
+			"event": "raise", "seat": seat, "name": s.Name,
+			"amount": cost, "pot": e.pot, "currentBet": e.currentBet,
+		}, Target: -1}}
+		return append(evs, e.advanceBetting(r)...)
+	case "fold":
+		s.IsFolded = true
+		e.activeCount--
+		e.actedThisRound[e.currentSeat] = true
+		evs := []Event{{Type: "phase", Data: ActionData{
+			"event": "fold", "seat": seat, "name": s.Name,
+		}, Target: -1}}
+		if e.activeCount <= 1 {
+			return append(evs, e.settleByFold(r)...)
+		}
+		return append(evs, e.advanceBetting(r)...)
+	}
+	return []Event{{Type: "error", Data: ActionData{"msg": "未知操作"}, Target: seat}}
+}
+
+// handleSetNiu 处理凑牛阶段：仅非弃牌玩家可参与
+func (e *nnEngine) handleSetNiu(r *Room, seat int, action string, data ActionData) []Event {
 	if action != "niuniuSet" {
 		return []Event{{Type: "error", Data: ActionData{"msg": "请先凑牛"}, Target: seat}}
+	}
+	s := r.Seats[seat]
+	if s.IsFolded {
+		return []Event{{Type: "error", Data: ActionData{"msg": "已弃牌"}, Target: seat}}
 	}
 	if _, done := e.results[seat]; done {
 		return []Event{{Type: "error", Data: ActionData{"msg": "已确认"}, Target: seat}}
 	}
-	s := r.Seats[seat]
 	var chosen []Card
 	if arr, ok := data["cards"].([]interface{}); ok && len(arr) == 3 {
 		chosen = extractCards(arr)
@@ -337,7 +541,14 @@ func (e *nnEngine) HandleAction(r *Room, seat int, action string, data ActionDat
 	}
 	e.setCount++
 	evs := []Event{{Type: "phase", Data: ActionData{"event": "niuniuSet", "seat": seat, "name": s.Name, "name2": nnName(res)}, Target: -1}}
-	if e.setCount >= e.totalSeats {
+	// 仅统计非弃牌玩家是否都已凑牛
+	expected := 0
+	for _, seatIdx := range e.occupied {
+		if !r.Seats[seatIdx].IsFolded {
+			expected++
+		}
+	}
+	if e.setCount >= expected {
 		return append(evs, e.settle(r)...)
 	}
 	return evs
@@ -346,60 +557,114 @@ func (e *nnEngine) HandleAction(r *Room, seat int, action string, data ActionDat
 func (e *nnEngine) settle(r *Room) []Event {
 	e.phase = "settled"
 	dealerSeat := e.occupied[e.dealerIdx]
-	dealerRes := e.results[dealerSeat]
-	base := e.baseBet
-	evs := []Event{}
-	// 公开所有人手牌与牛型
+	dealerRes, dealerInResults := e.results[dealerSeat]
+	base := e.currentBet // 庄闲结算用当前注码（考虑底池）
+	// 找出非弃牌玩家中的最佳手牌（底池归属）
+	bestSeat := -1
+	var bestRes nnResult
 	for _, seatIdx := range e.occupied {
+		s := r.Seats[seatIdx]
+		if s.IsFolded {
+			continue
+		}
+		res := e.results[seatIdx]
+		if bestSeat == -1 || nnCompare(res, bestRes) > 0 {
+			bestSeat = seatIdx
+			bestRes = res
+		}
+	}
+	evs := []Event{}
+	// 公开所有非弃牌玩家手牌与牛型
+	for _, seatIdx := range e.occupied {
+		s := r.Seats[seatIdx]
+		if s.IsFolded {
+			continue
+		}
 		res := e.results[seatIdx]
 		evs = append(evs, Event{Type: "reveal", Data: ActionData{
-			"seat": seatIdx, "cards": r.Seats[seatIdx].Hand,
+			"seat": seatIdx, "cards": s.Hand,
 			"niuCards": res.NiuCards, "niuName": nnName(res), "multiplier": res.Multiplier,
 		}, Target: -1})
+	}
+	// deltaMap: 庄闲结算 + 底池分配（押注阶段已扣注码，故底池直接补给赢家）
+	deltaMap := map[int]int{}
+	if dealerInResults {
+		for _, seatIdx := range e.occupied {
+			s := r.Seats[seatIdx]
+			if s.IsFolded || seatIdx == dealerSeat {
+				continue
+			}
+			cmp := nnCompare(e.results[seatIdx], dealerRes)
+			if cmp > 0 {
+				deltaMap[seatIdx] += e.results[seatIdx].Multiplier * base
+				deltaMap[dealerSeat] -= e.results[seatIdx].Multiplier * base
+			} else if cmp < 0 {
+				deltaMap[seatIdx] -= dealerRes.Multiplier * base
+				deltaMap[dealerSeat] += dealerRes.Multiplier * base
+			}
+		}
+	}
+	// 底池分配给最佳手牌（同分平分）
+	potWinners := []int{}
+	for _, seatIdx := range e.occupied {
+		s := r.Seats[seatIdx]
+		if s.IsFolded {
+			continue
+		}
+		if nnCompare(e.results[seatIdx], bestRes) == 0 {
+			potWinners = append(potWinners, seatIdx)
+		}
+	}
+	share := 0
+	if len(potWinners) > 0 {
+		share = e.pot / len(potWinners)
+	}
+	for _, w := range potWinners {
+		deltaMap[w] += share
 	}
 	results := []ActionData{}
 	for _, seatIdx := range e.occupied {
 		s := r.Seats[seatIdx]
-		var d int
-		if seatIdx == dealerSeat {
-			// 庄家与所有闲家结算
-			for _, other := range e.occupied {
-				if other == dealerSeat {
-					continue
-				}
-				cmp := nnCompare(dealerRes, e.results[other])
-				if cmp > 0 {
-					d += dealerRes.Multiplier * base
-				} else if cmp < 0 {
-					d -= e.results[other].Multiplier * base
-				}
-			}
-		} else {
-			cmp := nnCompare(e.results[seatIdx], dealerRes)
-			if cmp > 0 {
-				d = e.results[seatIdx].Multiplier * base
-			} else if cmp < 0 {
-				d = -dealerRes.Multiplier * base
-			}
+		gain := deltaMap[seatIdx] // 庄闲结算 + 底池收益
+		s.Chips += gain
+		// SettledDelta 为本局总盈亏 = 收益 - 自己已下的注（注码已在押注阶段扣除）
+		s.SettledDelta = gain - s.CurrentBet
+		niuName := ""
+		if !s.IsFolded {
+			niuName = nnName(e.results[seatIdx])
 		}
-		s.Chips += d
-		s.SettledDelta = d
-		results = append(results, ActionData{"seat": seatIdx, "name": s.Name, "delta": d, "chips": s.Chips,
-			"niuName": nnName(e.results[seatIdx]), "isDealer": seatIdx == dealerSeat, "win": d > 0})
+		results = append(results, ActionData{
+			"seat": seatIdx, "name": s.Name, "delta": s.SettledDelta, "chips": s.Chips,
+			"niuName": niuName, "isDealer": seatIdx == dealerSeat,
+			"isFolded": s.IsFolded, "win": s.SettledDelta > 0,
+		})
 	}
-	evs = append(evs, Event{Type: "settle", Data: ActionData{"results": results, "game": "nn", "dealerSeat": dealerSeat}, Target: -1})
+	e.pot = 0
+	evs = append(evs, Event{Type: "settle", Data: ActionData{
+		"results": results, "game": "nn", "dealerSeat": dealerSeat, "potWinner": bestSeat,
+	}, Target: -1})
 	evs = append(evs, Event{Type: "phase", Data: ActionData{"phase": "settled", "message": "对局结束"}, Target: -1})
 	r.Phase = "settled"
 	for _, s := range r.Seats {
 		s.Ready = false
+		s.CurrentBet = 0
 	}
 	return evs
 }
 
 func (e *nnEngine) PublicArea(r *Room) PublicAreaView {
-	v := PublicAreaView{Phase: e.phase}
+	v := PublicAreaView{
+		Phase:       e.phase,
+		Pot:         e.pot,
+		BaseBet:     e.baseBet,
+		CurrentBet:  e.currentBet,
+		ActiveCount: e.activeCount,
+	}
 	if e.totalSeats > 0 && len(e.occupied) > 0 && e.dealerIdx >= 0 && e.dealerIdx < len(e.occupied) {
 		v.DealerSeat = e.occupied[e.dealerIdx]
+	}
+	if e.phase == "betting" && len(e.occupied) > 0 && e.currentSeat >= 0 && e.currentSeat < len(e.occupied) {
+		v.CurrentSeat = e.occupied[e.currentSeat]
 	}
 	return v
 }
