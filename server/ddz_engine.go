@@ -33,14 +33,23 @@ func (e *ddzEngine) OnSeatVacated(r *Room, seat int) []Event {
 		return nil
 	}
 	e.phase = "settled"
-	r.Phase = "waiting"
+	// 统一为 settled 状态，由房主重新准备开局；避免 phase 字段矛盾导致前端困惑
+	r.Phase = "settled"
 	for _, s := range r.Seats {
 		s.Ready = false
 		s.Hand = nil
 	}
-	return []Event{Event{Type: "phase", Data: ActionData{
-		"phase": "settled", "message": "玩家离场，本局中止",
-	}, Target: -1}}
+	// 生成结算事件（delta=0 平局），让前端能正常显示结算面板并重启
+	results := []ActionData{}
+	for _, seatIdx := range e.occupied {
+		s := r.Seats[seatIdx]
+		s.SettledDelta = 0
+		results = append(results, ActionData{"seat": seatIdx, "name": s.Name, "delta": 0, "chips": s.Chips, "win": false})
+	}
+	return []Event{
+		{Type: "settle", Data: ActionData{"results": results, "game": "ddz", "landlordWin": false, "multiplier": 1, "aborted": true}, Target: -1},
+		{Type: "phase", Data: ActionData{"phase": "settled", "message": "玩家离场，本局中止"}, Target: -1},
+	}
 }
 
 func (e *ddzEngine) reset() {

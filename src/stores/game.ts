@@ -14,6 +14,9 @@ let joinedCode: string | null = null
 let heartbeatTimer: any = null
 let reconnectTimer: any = null
 let reconnectAttempts = 0
+// 主动离开/清理标记：为 true 时 onclose 不触发自动重连
+// 用独立标志而非复用 reconnectAttempts，避免污染计数器导致新房间无法重连
+let intentionalClose = false
 const HEARTBEAT_INTERVAL = 15000 // 15s 应用层心跳
 const MAX_RECONNECT = 8
 
@@ -23,6 +26,7 @@ export const useGameStore = defineStore('game', () => {
   const connected = ref(false)
   const connecting = ref(false)
   const reconnecting = ref(false)
+  const failed = ref(false) // 重连彻底失败，需用户手动刷新
 
   const room = ref<RoomState | null>(null)
   const myHand = ref<Card[]>([])
@@ -72,6 +76,7 @@ export const useGameStore = defineStore('game', () => {
     if (reconnectTimer) return
     if (reconnectAttempts >= MAX_RECONNECT) {
       reconnecting.value = false
+      failed.value = true
       showError('重连失败，请刷新页面')
       return
     }
@@ -95,23 +100,33 @@ export const useGameStore = defineStore('game', () => {
   function connect(isReconnect = false): Promise<void> {
     if (socket && socket.readyState === WebSocket.OPEN) {
       connected.value = true
+      // 重置重连状态（可能从其他页面切回，socket 仍在线）
+      intentionalClose = false
+      failed.value = false
+      reconnectAttempts = 0
       return Promise.resolve()
     }
     if (connectPromise) return connectPromise
     connecting.value = true
+    // 开始新连接前清除主动关闭标记
+    intentionalClose = false
     connectPromise = new Promise<void>((resolve, reject) => {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws'
       const url = `${proto}://${location.host}/ws`
       const ws = new WebSocket(url)
       socket = ws
+      let settled = false
       ws.onopen = () => {
         connected.value = true
         connecting.value = false
         reconnecting.value = false
+        failed.value = false
         reconnectAttempts = 0
+        intentionalClose = false
         // 上报 enter（携带本地 playerId 以便重连夺回座位）
         ws.send(JSON.stringify({ type: 'enter', data: { name: name.value, playerId: playerId.value } }))
         startHeartbeat()
+        settled = true
         resolve()
       }
       ws.onmessage = (ev) => {
@@ -132,14 +147,24 @@ export const useGameStore = defineStore('game', () => {
         socket = null
         connectPromise = null
         stopHeartbeat()
+        // 主动离开不重连
+        if (intentionalClose) return
         // 若仍在房间内则尝试自动重连
         if (joinedCode && reconnectAttempts < MAX_RECONNECT) {
           scheduleReconnect()
+        } else if (reconnectAttempts >= MAX_RECONNECT) {
+          failed.value = true
         }
       }
-      // 超时保护
+      // 超时保护：超时则关闭 ws 并清理，避免 promise 泄漏与状态错乱
       setTimeout(() => {
-        if (!connected.value) reject(new Error('连接超时'))
+        if (!settled) {
+          ws.close()
+          socket = null
+          connectPromise = null
+          connecting.value = false
+          reject(new Error('连接超时'))
+        }
       }, 8000)
     })
     return connectPromise
@@ -159,6 +184,10 @@ export const useGameStore = defineStore('game', () => {
   function joinRoom(code: string) {
     // 记录已加入的房间号，断线重连时自动重新加入
     joinedCode = code
+    // 进入新房间：清除主动关闭标记，确保断线后可正常重连
+    intentionalClose = false
+    failed.value = false
+    reconnectAttempts = 0
     send('joinRoom', { code })
   }
 
@@ -172,6 +201,9 @@ export const useGameStore = defineStore('game', () => {
         break
       case 'roomCreated':
         joinedCode = d.code
+        intentionalClose = false
+        failed.value = false
+        reconnectAttempts = 0
         router.push(`/room/${d.code}`)
         break
       case 'joined':
@@ -250,9 +282,10 @@ export const useGameStore = defineStore('game', () => {
   // 清理房间相关本地状态（停心跳/重连、清 joinedCode 防止重连拉回、清空状态）
   // 不发送 leave，不跳转路由，供路由守卫与 leaveRoom 复用
   function cleanupRoom() {
+    // 标记主动关闭，阻止 onclose 触发自动重连（用独立标志，不污染 reconnectAttempts）
+    intentionalClose = true
     joinedCode = null
     stopHeartbeat()
-    reconnectAttempts = MAX_RECONNECT // 阻止自动重连
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
     reconnecting.value = false
     room.value = null
@@ -266,8 +299,8 @@ export const useGameStore = defineStore('game', () => {
   }
 
   function leaveRoom() {
+    // 仅发 leave 通知服务端，由路由守卫统一 cleanupRoom（避免重复清理）
     send('leave', {})
-    cleanupRoom()
     router.push('/')
   }
 
@@ -281,6 +314,7 @@ export const useGameStore = defineStore('game', () => {
     connected,
     connecting,
     reconnecting,
+    failed,
     room,
     myHand,
     chat,

@@ -142,9 +142,10 @@ func (e *zjhEngine) OnSeatVacated(r *Room, seat int) []Event {
 		return nil
 	}
 	actives := e.activeSeats(r)
+	// 关键：更新 activeCount，否则后续 fold/compare 的 activeCount-- 与 <=1 判断全部失真
+	e.activeCount = len(actives)
 	if len(actives) <= 1 {
-		// 仅剩一人，直接结算
-		e.activeCount = len(actives)
+		// 仅剩一人或无人，直接结算
 		return e.settleByFold(r)
 	}
 	// 若当前轮到的是被腾空座位，推进到下一活跃玩家
@@ -249,7 +250,8 @@ func (e *zjhEngine) nextActive(r *Room) {
 	for i := 0; i < n; i++ {
 		e.currentSeat = (e.currentSeat + 1) % n
 		seat := r.Seats[e.occupied[e.currentSeat]]
-		if !seat.IsFolded && seat.PlayerID != "" {
+		// 跳过已弃牌、已腾空、掉线（Client==nil）的座位，避免轮到离线玩家卡死
+		if !seat.IsFolded && seat.PlayerID != "" && seat.Client != nil {
 			return
 		}
 	}
@@ -359,11 +361,16 @@ func (e *zjhEngine) HandleAction(r *Room, seat int, action string, data ActionDa
 		if newBet > e.cap {
 			newBet = e.cap
 		}
-		e.currentBet = newBet
+		// 已达上限不能再加注
+		if newBet == e.currentBet {
+			return []Event{{Type: "error", Data: ActionData{"msg": "已达加注上限"}, Target: seat}}
+		}
 		cost := e.callCost(s)
 		if s.Chips < cost {
 			return []Event{{Type: "error", Data: ActionData{"msg": "筹码不足，请弃牌"}, Target: seat}}
 		}
+		// 先校验筹码再提交 currentBet，避免失败后全局 currentBet 被错误翻倍
+		e.currentBet = newBet
 		s.Chips -= cost
 		s.CurrentBet += cost
 		e.pot += cost
@@ -443,6 +450,25 @@ func (e *zjhEngine) HandleAction(r *Room, seat int, action string, data ActionDa
 func (e *zjhEngine) settleByFold(r *Room) []Event {
 	e.phase = "settled"
 	actives := e.activeSeats(r)
+	// 防御：活跃玩家为空时（全员弃牌/腾空），直接平局结算避免 panic
+	if len(actives) == 0 {
+		results := []ActionData{}
+		for _, seatIdx := range e.occupied {
+			s := r.Seats[seatIdx]
+			s.SettledDelta = -s.CurrentBet
+			results = append(results, ActionData{"seat": seatIdx, "name": s.Name, "delta": s.SettledDelta, "chips": s.Chips, "win": false})
+		}
+		e.pot = 0
+		r.Phase = "settled"
+		for _, s := range r.Seats {
+			s.Ready = false
+			s.CurrentBet = 0
+		}
+		return []Event{
+			{Type: "settle", Data: ActionData{"results": results, "game": "zjh", "winnerSeat": -1}, Target: -1},
+			{Type: "phase", Data: ActionData{"phase": "settled", "message": "全员离场，本局中止"}, Target: -1},
+		}
+	}
 	winner := actives[0]
 	w := r.Seats[winner]
 	evs := []Event{{

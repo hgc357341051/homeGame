@@ -233,6 +233,8 @@ func (e *nnEngine) OnSeatVacated(r *Room, seat int) []Event {
 	if seat >= 0 && seat < len(r.Seats) {
 		r.Seats[seat].IsFolded = true
 	}
+	// 删除该座位的凑牛结果，避免庄家离场后其旧结果仍参与结算（M2）
+	delete(e.results, seat)
 	if e.phase == "betting" {
 		// 重新统计活跃玩家数（跳过已弃牌与已腾空座位）
 		actives := 0
@@ -341,7 +343,9 @@ func (e *nnEngine) nextActive(r *Room) {
 	n := len(e.occupied)
 	for i := 0; i < n; i++ {
 		e.currentSeat = (e.currentSeat + 1) % n
-		if !r.Seats[e.occupied[e.currentSeat]].IsFolded {
+		s := r.Seats[e.occupied[e.currentSeat]]
+		// 跳过已弃牌、已腾空、掉线的座位
+		if !s.IsFolded && s.PlayerID != "" && s.Client != nil {
 			return
 		}
 	}
@@ -478,12 +482,12 @@ func (e *nnEngine) handleBetting(r *Room, seat int, action string, data ActionDa
 		if newBet == e.currentBet {
 			return []Event{{Type: "error", Data: ActionData{"msg": "已达上限，无法加注"}, Target: seat}}
 		}
-		e.currentBet = newBet
-		cost := e.currentBet
+		cost := newBet
 		if s.Chips < cost {
-			e.currentBet = e.currentBet / 2 // 回滚
+			// 筹码不足：不提交 currentBet，避免回滚算法在 cap 截断时算错
 			return []Event{{Type: "error", Data: ActionData{"msg": "筹码不足，请弃牌"}, Target: seat}}
 		}
+		e.currentBet = newBet
 		s.Chips -= cost
 		s.CurrentBet += cost
 		e.pot += cost

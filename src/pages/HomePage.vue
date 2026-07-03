@@ -18,7 +18,7 @@ function commitName() {
 
 function createRoom(game: GameCode) {
   commitName()
-  store.connect().then(() => store.send('createRoom', { game }))
+  store.connect().then(() => store.send('createRoom', { game })).catch(() => {})
 }
 function joinRoom() {
   const code = joinCode.value.trim().toUpperCase()
@@ -26,7 +26,8 @@ function joinRoom() {
     return
   }
   commitName()
-  store.connect().then(() => store.send('joinRoom', { code }))
+  // 使用 store.joinRoom 而非 store.send，确保 joinedCode 被设置（断线重连依赖）
+  store.connect().then(() => store.joinRoom(code)).catch(() => {})
 }
 
 const games = Object.keys(GAME_META) as GameCode[]

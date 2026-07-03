@@ -388,6 +388,12 @@ func (r *Room) emitEvents(evs []Event) {
 func (r *Room) applyAction(c *Client, action string, data ActionData) {
 	r.mu.Lock()
 	seat := r.findSeat(c.playerID)
+	// 防御僵尸连接越权：若该座位已被新连接接管，旧连接的动作一律拒绝
+	if seat >= 0 && r.Seats[seat].Client != c {
+		r.mu.Unlock()
+		c.emitError("会话已失效，请刷新页面")
+		return
+	}
 
 	// 全局动作（不需要座位）
 	switch action {
@@ -535,6 +541,17 @@ func (r *Room) handleSit(c *Client, data ActionData) {
 		}
 	}
 	seatName := c.name
+	// 在锁内计算继承手牌的可视图（蒙牌模式下不能暴露未查看的牌）
+	var inheritCards []Card
+	var inheritBlind bool
+	var inheritLooked []bool
+	if inheritHand {
+		inheritCards = r.Engine.PlayerHand(s)
+		inheritBlind = r.BlindMode
+		if r.BlindMode && s.LookedIndices != nil {
+			inheritLooked = append([]bool{}, s.LookedIndices...)
+		}
+	}
 	r.mu.Unlock()
 	if inheritHand {
 		r.systemChat(seatName + " 接管了掉线座位（继承手牌）")
@@ -542,9 +559,16 @@ func (r *Room) handleSit(c *Client, data ActionData) {
 		r.systemChat(seatName + " 入座")
 	}
 	r.broadcastState()
-	// 继承手牌时补发 deal 给新入座者
+	// 继承手牌时补发 deal 给新入座者（用引擎可见性，避免蒙牌模式下暴露未查看的牌）
 	if inheritHand {
-		c.sendMsg(Message{Type: "deal", Data: ActionData{"cards": s.Hand}})
+		dealData := ActionData{"cards": inheritCards}
+		if inheritBlind {
+			dealData["blindMode"] = true
+			if inheritLooked != nil {
+				dealData["lookedIndices"] = inheritLooked
+			}
+		}
+		c.sendMsg(Message{Type: "deal", Data: dealData})
 	}
 }
 

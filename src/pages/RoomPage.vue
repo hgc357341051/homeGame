@@ -192,8 +192,8 @@ onUnmounted(() => {
       </div>
       <div class="header-actions">
         <div class="conn-status">
-          <span class="dot" :class="{ on: store.connected, reconnect: store.reconnecting }" />
-          <span class="conn-text">{{ store.reconnecting ? '重连中…' : (store.connected ? '在线' : '连接中…') }}</span>
+          <span class="dot" :class="{ on: store.connected, reconnect: store.reconnecting, fail: store.failed }" />
+          <span class="conn-text">{{ store.failed ? '已断开' : (store.reconnecting ? '重连中…' : (store.connected ? '在线' : '连接中…')) }}</span>
         </div>
         <button class="btn btn-ghost leave-btn" @click="leave">离开房间</button>
         <button class="btn btn-ghost chat-fab" @click="chatOpen = !chatOpen" aria-label="消息">💬</button>
@@ -479,6 +479,10 @@ onUnmounted(() => {
   background: #fbbf24;
   box-shadow: 0 0 8px #fbbf24;
   animation: pulseGold 1s ease-in-out infinite;
+}
+.dot.fail {
+  background: #ef4444;
+  box-shadow: 0 0 8px #ef4444;
 }
 .leave-btn {
   padding: 0.45rem 0.9rem;
