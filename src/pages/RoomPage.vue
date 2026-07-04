@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import { useGameStore } from '@/stores/game'
 import { GAME_META, type Card, type SeatView } from '@/types'
 import { soundEnabled, vibrateEnabled, setSound, setVibrate, sfxTurn } from '@/utils/feedback'
+import { identifyDDZPlay } from '@/utils/ddzTypes'
 import Seat from '@/components/Seat.vue'
 import MyHand from '@/components/MyHand.vue'
 import ActionBar from '@/components/ActionBar.vue'
@@ -292,7 +293,7 @@ function onKeydown(e: KeyboardEvent) {
   if (store.settle) {
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault()
-      if (store.isOwner) store.send('start')
+      if (store.isOwner && store.guardAct()) store.send('start')
       store.clearSettle()
     } else if (e.key === 'Escape') {
       store.clearSettle()
@@ -318,7 +319,7 @@ function onKeydown(e: KeyboardEvent) {
   // 等待阶段：R 切换准备
   if (phase.value === 'waiting' && mySeatView.value && (e.key === 'r' || e.key === 'R')) {
     e.preventDefault()
-    store.send('ready')
+    if (store.guardAct()) store.send('ready')
     return
   }
   // 自己回合：回车=主操作（出牌/跟注/确认），空格=不要/弃牌
@@ -327,8 +328,14 @@ function onKeydown(e: KeyboardEvent) {
   if (!t) return
   if (e.key === 'Enter') {
     e.preventDefault()
+    if (!store.guardAct()) return
     if (game.value === 'ddz' && t.phase === 'playing') {
-      if (selectedCards.value.length > 0) store.send('play', { cards: selectedCards.value })
+      if (selectedCards.value.length > 0) {
+        // 牌型无效时阻止出牌（与服务端校验一致，避免无效请求）
+        const pi = identifyDDZPlay(selectedCards.value)
+        if (!pi.valid) return
+        store.send('play', { cards: selectedCards.value })
+      }
     } else if (game.value === 'ddz' && t.phase === 'callLandlord') {
       store.send('callLandlord', { call: true })
     } else if (game.value === 'zjh' && t.phase === 'betting') {
@@ -340,8 +347,11 @@ function onKeydown(e: KeyboardEvent) {
     }
   } else if (e.key === ' ') {
     e.preventDefault()
+    if (!store.guardAct()) return
     if (game.value === 'ddz' && t.phase === 'playing') {
-      if (room.value?.publicArea.lastPlay) store.send('pass', {})
+      // 仅跟牌模式（上一手是别人出的）才允许 pass；自由出牌时空格无操作
+      const lp = room.value?.publicArea?.lastPlay
+      if (lp && lp.seat !== room.value?.mySeat) store.send('pass', {})
     } else if (game.value === 'ddz' && t.phase === 'callLandlord') {
       store.send('callLandlord', { call: false })
     } else if ((game.value === 'zjh' || game.value === 'nn') && t.phase === 'betting') {

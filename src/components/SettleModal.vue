@@ -12,13 +12,20 @@ const winnerName = computed(() => {
 })
 const isWin = computed(() => {
   const me = data.value?.results?.find((x: any) => x.seat === store.room?.mySeat)
-  return me?.delta > 0
+  // delta>0 胜，delta=0 平局（牛牛庄闲牛点相同），均不当作失败显示
+  return (me?.delta ?? 0) >= 0 && !!me
+})
+const isDraw = computed(() => {
+  const me = data.value?.results?.find((x: any) => x.seat === store.room?.mySeat)
+  return me?.delta === 0
 })
 
 function close() {
   store.clearSettle()
 }
 function again() {
+  // 复用 store 通用防抖，避免连点连发 start
+  if (!store.guardAct()) return
   store.send('start')
   store.clearSettle()
 }
@@ -56,11 +63,16 @@ const coins = Array.from({ length: 18 }, (_, i) => ({
             <template v-if="data?.game === 'ddz'">
               {{ data?.landlordWin ? '地主胜利' : '农民胜利' }}
             </template>
+            <template v-else-if="isDraw">
+              平局
+            </template>
             <template v-else>
               {{ winnerName }} 获胜
             </template>
           </div>
-          <div class="sub">{{ isWin ? '恭喜你赢得本局' : '再接再厉' }}</div>
+          <div class="sub">
+            {{ isDraw ? '本局平局' : (isWin ? '恭喜你赢得本局' : '再接再厉') }}
+          </div>
         </div>
 
         <div class="results">

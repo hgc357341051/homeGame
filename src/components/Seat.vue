@@ -97,7 +97,7 @@ function renameSeat() {
         </span>
         <span class="badge looked" v-if="seat.isLooked && !seat.isFolded && !seat.offline">看牌</span>
         <span class="badge revealed" v-if="seat.isRevealed">已开牌</span>
-        <span class="badge looking" v-if="seat.lookedIndices && !seat.isRevealed && !seat.isFolded">
+        <span class="badge looking" v-if="seat.lookedIndices && seat.lookedIndices.length > 0 && !seat.isRevealed && !seat.isFolded">
           看{{ seat.lookedIndices.filter(Boolean).length }}/{{ seat.lookedIndices.length }}
         </span>
       </div>

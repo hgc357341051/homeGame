@@ -250,6 +250,16 @@ export const useGameStore = defineStore('game', () => {
     }
   }
 
+  // 通用动作防抖：400ms 内只允许一次发送，避免连点/按键连发请求 flooding 服务端
+  // 供 ActionBar 按钮、键盘快捷键、SettleModal 再来一局等所有动作调用方复用
+  let actingUntil = 0
+  function guardAct(): boolean {
+    const now = Date.now()
+    if (now < actingUntil) return false
+    actingUntil = now + 400
+    return true
+  }
+
   function setName(n: string) {
     name.value = n
     localStorage.setItem(LS_NAME, n)
@@ -452,6 +462,8 @@ export const useGameStore = defineStore('game', () => {
     isMyTurn,
     connect,
     send,
+    guardAct,
+    showError,
     setName,
     joinRoom,
     clearReveal,

@@ -1,5 +1,5 @@
 // 斗地主牌型识别（仅用于前端显示提示，实际校验由服务端完成）
-// value: 3-15(3-A), 16=2, 17=小王, 18=大王
+// value 映射（与服务端 cards.go 一致）：3-14=3~A, 15=2, 16=小王, 17=大王
 import type { Card } from '@/types'
 
 export interface PlayTypeInfo {
@@ -82,15 +82,41 @@ export function identifyDDZPlay(cards: Card[]): PlayTypeInfo {
     }
     if (ok && vs[vs.length - 1] < 15) return { name: `飞机 ${n / 3}组`, valid: true }
   }
-  // 飞机带翅膀（飞机 + 等量单牌/对子）— 简化识别
-  const tripleGroups = groups.filter((g) => g.c >= 3)
-  if (tripleGroups.length >= 2 && n >= 8) {
+  // 飞机带翅膀（N 组连续三张 + N 个翅膀，翅膀为单牌或对牌，不含 2 和王）
+  // 标准：2组三张带2个翅膀（8张：2单 或 2对），3组三张带3个翅膀（12张：3单 或 3对）
+  const tripleGroups = groups.filter((g) => g.c === 3)
+  if (tripleGroups.length >= 2) {
     const tps = tripleGroups.map((g) => g.v).sort((a, b) => a - b)
-    let consecutive = 1
+    // 找最长连续段
+    let maxConsec = 1, curConsec = 1
     for (let i = 1; i < tps.length; i++) {
-      if (tps[i] === tps[i - 1] + 1) consecutive++
+      if (tps[i] === tps[i - 1] + 1) { curConsec++; maxConsec = Math.max(maxConsec, curConsec) }
+      else curConsec = 1
     }
-    if (consecutive >= 2) return { name: `飞机带翅膀`, valid: true }
+    if (maxConsec >= 2) {
+      // 取最长连续段的三张数 k，剩余必须正好是 k 个翅膀（每个为单牌或对牌，且不含 2/王）
+      // 简化：用 maxConsec 作为三张组数，校验剩余牌数
+      const k = maxConsec
+      // 取连续段的三张
+      const usedTriples = new Set<number>()
+      let segStart = 0, segLen = 1
+      for (let i = 1; i < tps.length; i++) {
+        if (tps[i] === tps[i - 1] + 1) { segLen++; if (segLen >= k) segStart = i - segLen + 1 }
+        else segLen = 1
+      }
+      for (let i = segStart; i < segStart + k; i++) usedTriples.add(tps[i])
+      const wings = groups.filter((g) => !usedTriples.has(g.v))
+      // 三张部分若有非连续三张（c===3 但不在段内），则整体不合法
+      if (wings.some((g) => g.c === 3)) return { name: '无法识别', valid: false }
+      // 翅膀数必须等于 k，每个翅膀为单牌(c===1)或对牌(c===2)
+      if (wings.length === k && wings.every((g) => g.c === 1 || g.c === 2)) {
+        // 翅膀不含 2 和王
+        if (wings.every((g) => g.v < 15)) {
+          const allPairs = wings.every((g) => g.c === 2)
+          return { name: `飞机带${allPairs ? '对' : '翅膀'} ${k}组`, valid: true }
+        }
+      }
+    }
   }
   // 四带二
   if (n === 6 && groups[0].c === 4) return { name: `四带二 ${rankName(groups[0].v)}`, valid: true }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onUnmounted } from 'vue'
 import type { Card, SeatView } from '@/types'
 import { useGameStore } from '@/stores/game'
 import { identifyDDZPlay } from '@/utils/ddzTypes'
@@ -19,6 +19,25 @@ const ddzPlayType = computed(() => {
   if (room.value?.game !== 'ddz' || !isMyTurn.value || turn.value?.phase !== 'playing') return null
   if (props.selectedCards.length === 0) return null
   return identifyDDZPlay(props.selectedCards)
+})
+
+// DDZ 是否为跟牌模式（上一手是别人出的）。
+// 当其他玩家都"不要"后轮回自己，lastPlay.seat === mySeat，此时为自由出牌，不应显示"不要"按钮。
+const ddzMustFollow = computed(() => {
+  const lp = room.value?.publicArea?.lastPlay
+  return !!lp && lp.seat !== room.value?.mySeat
+})
+
+// 筹码是否足够跟注/加注：避免点击后被服务端拒绝
+// 跟注需支付 callCost（炸金花）或 currentBet（牛牛）
+const canAffordCall = computed(() => {
+  const cost = turn.value?.callCost ?? turn.value?.currentBet ?? 0
+  return (mySeat.value?.chips ?? 0) >= cost
+})
+// 加注至少需支付当前注的 2 倍（简化估算，服务端权威校验）
+const canAffordRaise = computed(() => {
+  const base = turn.value?.currentBet ?? turn.value?.callCost ?? 0
+  return (mySeat.value?.chips ?? 0) >= base * 2
 })
 
 const readyCount = computed(() => {
@@ -59,6 +78,10 @@ function guardAct() {
   actingTimer = setTimeout(() => { acting.value = false }, 400)
   return true
 }
+// 卸载时清理防抖定时器，避免回调在组件销毁后仍执行
+onUnmounted(() => {
+  if (actingTimer) clearTimeout(actingTimer)
+})
 function act(type: string, data: any = {}) {
   if (!guardAct()) return
   store.send(type, data)
@@ -142,10 +165,10 @@ function niuniuConfirm() {
     <!-- 斗地主出牌 -->
     <template v-else-if="isMyTurn && room?.game === 'ddz' && turn?.phase === 'playing'">
       <span v-if="ddzPlayType" class="play-type" :class="{ invalid: !ddzPlayType.valid }">{{ ddzPlayType.name }}</span>
-      <button class="btn btn-gold" :disabled="selectedCards.length === 0 || acting" @click="playCards">
+      <button class="btn btn-gold" :disabled="selectedCards.length === 0 || acting || ddzPlayType?.valid === false" @click="playCards">
         出牌 ({{ selectedCards.length }})
       </button>
-      <button v-if="room.publicArea.lastPlay" class="btn btn-ghost" :disabled="acting" @click="pass">不要</button>
+      <button v-if="ddzMustFollow" class="btn btn-ghost" :disabled="acting" @click="pass">不要</button>
       <span v-else class="prompt">自由出牌</span>
     </template>
 
@@ -180,8 +203,8 @@ function niuniuConfirm() {
         </template>
         <!-- 非蒙牌模式：看牌 -->
         <button v-if="turn?.actions?.includes('look')" class="btn btn-ghost" :disabled="acting" @click="look">看牌</button>
-        <button class="btn btn-gold" :disabled="acting" @click="callBet">跟注 {{ turn?.callCost }}</button>
-        <button class="btn btn-ghost" :disabled="acting" @click="raise">加注</button>
+        <button class="btn btn-gold" :disabled="acting || !canAffordCall" @click="callBet">跟注 {{ turn?.callCost }}</button>
+        <button class="btn btn-ghost" :disabled="acting || !canAffordRaise" @click="raise">加注</button>
         <button v-if="turn?.actions?.includes('compare')" class="btn btn-ghost" :disabled="acting" @click="pickingCompare = true">
           比牌
         </button>
@@ -192,8 +215,8 @@ function niuniuConfirm() {
     <!-- 牛牛押注阶段 -->
     <template v-else-if="isMyTurn && room?.game === 'nn' && turn?.phase === 'betting'">
       <span class="prompt">底池 {{ turn?.pot }} · 当前注 {{ turn?.currentBet }}</span>
-      <button class="btn btn-gold" :disabled="acting" @click="callBet">跟注 {{ turn?.currentBet }}</button>
-      <button class="btn btn-ghost" :disabled="acting" @click="raise">加注</button>
+      <button class="btn btn-gold" :disabled="acting || !canAffordCall" @click="callBet">跟注 {{ turn?.currentBet }}</button>
+      <button class="btn btn-ghost" :disabled="acting || !canAffordRaise" @click="raise">加注</button>
       <button class="btn btn-wine" :disabled="acting" @click="fold">弃牌</button>
     </template>
 

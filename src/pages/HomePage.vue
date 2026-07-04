@@ -38,7 +38,9 @@ function createRoom(game: GameCode) {
   commitName()
   store.connect().then(() => {
     store.send('createRoom', { game })
-  }).catch(() => {}).finally(() => {
+  }).catch(() => {
+    store.showError('连接服务器失败，请检查网络后重试')
+  }).finally(() => {
     // 路由跳转会卸载组件；保留短暂防抖即可
     setTimeout(() => { creating.value = false }, 600)
   })
@@ -48,7 +50,9 @@ function joinRoom() {
   const code = joinCode.value.trim().toUpperCase()
   commitName()
   // 使用 store.joinRoom 而非 store.send，确保 joinedCode 被设置（断线重连依赖）
-  store.connect().then(() => store.joinRoom(code)).catch(() => {})
+  store.connect().then(() => store.joinRoom(code)).catch(() => {
+    store.showError('连接服务器失败，请检查网络后重试')
+  })
 }
 
 const games = Object.keys(GAME_META) as GameCode[]
