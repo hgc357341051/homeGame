@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed, reactive } from 'vue'
 import type { RoomState, Card, ChatMsg, ServerMessage } from '@/types'
 import router from '@/router'
+import { sfxTurn, sfxPlay, sfxWin, sfxLose, sfxError, sfxCoin, vibrateTurn } from '@/utils/feedback'
 
 const LS_PID = 'fc_playerId'
 const LS_NAME = 'fc_name'
@@ -120,6 +121,8 @@ export const useGameStore = defineStore('game', () => {
         // 重连成功：重新进入房间
         if (joinedCode) {
           send('joinRoom', { code: joinedCode })
+          // 重连成功提示，让用户知道已恢复（非首次连接）
+          showError('已重新连接')
         }
       } catch {
         scheduleReconnect()
@@ -289,6 +292,11 @@ export const useGameStore = defineStore('game', () => {
         break
       case 'turn':
         turn.value = d
+        // 轮到自己：振动 + 音效提示（移动端刚需，避免错过出牌）
+        if (d.seat === room.value?.mySeat) {
+          vibrateTurn()
+          sfxTurn()
+        }
         break
       case 'phase':
         if (d.message) {
@@ -298,19 +306,36 @@ export const useGameStore = defineStore('game', () => {
         if (d.event === 'look') pushLog(`${d.name} 看牌`, 'event')
         if (d.event === 'lookCard') pushLog(`${d.name} 查看第${(d.index ?? 0) + 1}张牌`, 'event')
         if (d.event === 'fold') pushLog(`${d.name} 弃牌`, 'event')
-        if (d.event === 'call') pushLog(`${d.name} 跟注 ${d.amount}`, 'event')
-        if (d.event === 'raise') pushLog(`${d.name} 加注到 ${d.currentBet} (付 ${d.amount})`, 'event')
+        if (d.event === 'call') {
+          pushLog(`${d.name} 跟注 ${d.amount}`, 'event')
+          sfxCoin()
+        }
+        if (d.event === 'raise') {
+          pushLog(`${d.name} 加注到 ${d.currentBet} (付 ${d.amount})`, 'event')
+          sfxCoin()
+        }
         if (d.event === 'niuniuSet') pushLog(`${d.name} 确认 ${d.name2}`, 'event')
         break
       case 'played':
         if (d.pass) pushLog(`${seatName(d.seat)} 不要`, 'event')
-        else pushLog(`${seatName(d.seat)} 出牌`, 'event')
+        else {
+          pushLog(`${seatName(d.seat)} 出牌`, 'event')
+          sfxPlay()
+        }
         break
       case 'reveal':
         reveal.value = { ...d, ts: Date.now() }
         break
       case 'settle':
         settle.value = { ...d, ts: Date.now() }
+        // 结算音效：根据自己输赢播放
+        {
+          const me = d.results?.find((x: any) => x.seat === room.value?.mySeat)
+          if (me) {
+            if (me.delta > 0) sfxWin()
+            else if (me.delta < 0) sfxLose()
+          }
+        }
         break
       case 'chat':
         chat.value.push({ player: d.player, text: d.text, ts: Date.now(), system: d.system })
@@ -318,6 +343,7 @@ export const useGameStore = defineStore('game', () => {
         break
       case 'error':
         showError(d.msg || '操作失败')
+        sfxError()
         break
     }
   }

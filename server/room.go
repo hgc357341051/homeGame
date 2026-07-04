@@ -82,16 +82,22 @@ type Room struct {
 	rnd        *rand.Rand
 	mu         sync.Mutex
 	createdAt  time.Time
+	// 出牌超时：每个有 turn 事件的座位一个定时器，超时触发默认动作防挂机
+	turnTimers map[int]*time.Timer
 }
+
+// turnTimeout 出牌超时秒数：超时后自动执行默认动作（弃牌/不要/自动凑牛）
+const turnTimeout = 30 * time.Second
 
 func newRoom(code, game, hostID string) *Room {
 	r := &Room{
-		Code:      code,
-		Game:      game,
-		HostID:    hostID,
-		Phase:     "waiting",
-		rnd:       rand.New(rand.NewSource(time.Now().UnixNano())),
-		createdAt: time.Now(),
+		Code:       code,
+		Game:       game,
+		HostID:     hostID,
+		Phase:      "waiting",
+		rnd:        rand.New(rand.NewSource(time.Now().UnixNano())),
+		createdAt:  time.Now(),
+		turnTimers: map[int]*time.Timer{},
 	}
 	r.Engine = newEngine(game)
 	max := r.Engine.MaxPlayers()
@@ -382,6 +388,79 @@ func (r *Room) emitEvents(evs []Event) {
 	for _, e := range evs {
 		r.broadcast(e)
 	}
+	// 检测 settle 事件：对局结束，清除所有出牌定时器
+	hasSettle := false
+	for _, e := range evs {
+		if e.Type == "settle" {
+			hasSettle = true
+			break
+		}
+	}
+	if hasSettle {
+		r.clearTurnTimers()
+		return
+	}
+	// 扫描 turn 事件，为对应座位启动出牌超时定时器（防挂机）
+	// NN setNiu 阶段会下发多个 turn 事件，每个座位独立计时
+	for _, e := range evs {
+		if e.Type != "turn" {
+			continue
+		}
+		ad, ok := e.Data.(ActionData)
+		if !ok {
+			continue
+		}
+		seat, ok := ad["seat"].(int)
+		if !ok {
+			if f, ok2 := ad["seat"].(float64); ok2 {
+				seat = int(f)
+			} else {
+				continue
+			}
+		}
+		r.startTurnTimer(seat)
+	}
+}
+
+// startTurnTimer 启动某座位的出牌超时定时器；已有则重置
+// 必须在持有 r.mu 时调用（与 applyTimeout 加锁顺序一致）
+func (r *Room) startTurnTimer(seat int) {
+	if r.turnTimers == nil {
+		r.turnTimers = map[int]*time.Timer{}
+	}
+	if old := r.turnTimers[seat]; old != nil {
+		old.Stop()
+	}
+	r.turnTimers[seat] = time.AfterFunc(turnTimeout, func() {
+		r.applyTimeout(seat)
+	})
+}
+
+// clearTurnTimers 清除所有出牌定时器（对局结束/中止时调用）
+func (r *Room) clearTurnTimers() {
+	for _, t := range r.turnTimers {
+		t.Stop()
+	}
+	r.turnTimers = map[int]*time.Timer{}
+}
+
+// applyTimeout 出牌超时：调用引擎执行默认动作并广播
+func (r *Room) applyTimeout(seat int) {
+	r.mu.Lock()
+	// 对局已结束或座位已腾空，忽略
+	if r.Phase != "playing" {
+		r.mu.Unlock()
+		return
+	}
+	s := r.Seats[seat]
+	if s == nil || s.PlayerID == "" {
+		r.mu.Unlock()
+		return
+	}
+	evs := r.Engine.HandleAction(r, seat, "timeout", nil)
+	r.mu.Unlock()
+	r.emitEvents(evs)
+	r.broadcastState()
 }
 
 // 执行一个动作并广播状态

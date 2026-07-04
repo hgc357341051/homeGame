@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useGameStore } from '@/stores/game'
 import { GAME_META, type Card, type SeatView } from '@/types'
+import { soundEnabled, vibrateEnabled, setSound, setVibrate, sfxTurn } from '@/utils/feedback'
 import Seat from '@/components/Seat.vue'
 import MyHand from '@/components/MyHand.vue'
 import ActionBar from '@/components/ActionBar.vue'
@@ -22,6 +23,8 @@ const isMobile = ref(false)
 const landscapeMode = ref(false)
 // 房间号大字分享弹窗：点击房间号弹出，便于远距离查看/截图分享
 const shareOpen = ref(false)
+// 设置面板：音效/振动开关
+const settingsOpen = ref(false)
 let revealTimer: any = null
 
 const room = computed(() => store.room)
@@ -198,6 +201,16 @@ function copyAndCloseShare() {
   shareOpen.value = false
 }
 
+// 设置面板：音效/振动开关
+function toggleSound() {
+  setSound(!soundEnabled.value)
+  // 开启时播放试听音
+  if (soundEnabled.value) sfxTurn()
+}
+function toggleVibrate() {
+  setVibrate(!vibrateEnabled.value)
+}
+
 function leave() {
   // 对局中误点离开会触发 3 分钟座位保留，需二次确认
   if (phase.value === 'playing' && mySeatView.value) {
@@ -267,6 +280,12 @@ onUnmounted(() => {
           :aria-label="landscapeMode ? '退出横屏' : '横屏显示'"
           :title="landscapeMode ? '退出横屏' : '横屏显示'"
         >↻</button>
+        <button
+          class="btn btn-ghost icon-btn"
+          @click="settingsOpen = true"
+          aria-label="设置"
+          title="设置"
+        >⚙</button>
         <button class="btn btn-ghost leave-btn" @click="leave">离开房间</button>
         <button class="btn btn-ghost chat-fab" @click="chatOpen = !chatOpen" aria-label="消息">💬</button>
       </div>
@@ -487,6 +506,29 @@ onUnmounted(() => {
           <div class="share-actions">
             <button class="btn btn-ghost" @click="shareOpen = false">关闭</button>
             <button class="btn btn-gold" @click="copyAndCloseShare">{{ copied ? '✓ 已复制' : '复制配对码' }}</button>
+          </div>
+        </div>
+      </div>
+    </transition>
+
+    <!-- 设置面板 -->
+    <transition name="fade">
+      <div v-if="settingsOpen" class="share-overlay" @click="settingsOpen = false">
+        <div class="settings-card gold-border" @click.stop>
+          <div class="share-title">设置</div>
+          <label class="setting-row">
+            <span class="setting-label">🔊 音效</span>
+            <input type="checkbox" :checked="soundEnabled" @change="toggleSound" />
+            <span class="setting-switch" :class="{ on: soundEnabled }"><i></i></span>
+          </label>
+          <label class="setting-row">
+            <span class="setting-label">📳 振动</span>
+            <input type="checkbox" :checked="vibrateEnabled" @change="toggleVibrate" />
+            <span class="setting-switch" :class="{ on: vibrateEnabled }"><i></i></span>
+          </label>
+          <div class="setting-note">设置自动保存，下次访问仍生效</div>
+          <div class="share-actions">
+            <button class="btn btn-gold" @click="settingsOpen = false">完成</button>
           </div>
         </div>
       </div>
@@ -1022,6 +1064,62 @@ onUnmounted(() => {
   display: flex;
   gap: 0.8rem;
   justify-content: center;
+}
+
+/* ===== 设置面板 ===== */
+.settings-card {
+  border-radius: 18px;
+  padding: 1.6rem 1.8rem;
+  width: min(320px, 90vw);
+  text-align: center;
+}
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.7rem 0.5rem;
+  cursor: pointer;
+  position: relative;
+}
+.setting-row input[type="checkbox"] {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.setting-label {
+  font-size: 0.95rem;
+  color: var(--ivory);
+}
+.setting-switch {
+  width: 44px;
+  height: 24px;
+  border-radius: 999px;
+  background: rgba(7, 32, 24, 0.8);
+  border: 1px solid rgba(212, 175, 55, 0.3);
+  position: relative;
+  transition: background 0.2s ease;
+}
+.setting-switch i {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--ivory-dim);
+  transition: transform 0.2s ease, background 0.2s ease;
+}
+.setting-switch.on {
+  background: linear-gradient(135deg, var(--gold-soft), var(--gold-deep));
+}
+.setting-switch.on i {
+  transform: translateX(20px);
+  background: var(--ink);
+}
+.setting-note {
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin: 0.5rem 0 1rem;
 }
 
 /* ===== 过渡 ===== */

@@ -111,6 +111,24 @@ func (e *ddzEngine) seatIdxInOccupied(seat int) int {
 }
 
 func (e *ddzEngine) HandleAction(r *Room, seat int, action string, data ActionData) []Event {
+	// 出牌超时：叫地主阶段=不叫；出牌阶段=不要（有 lastPlay）或出最小单张（自由出牌）
+	if action == "timeout" {
+		if e.phase == "callLandlord" {
+			return e.handleCall(r, seat, "callLandlord", ActionData{"call": false})
+		}
+		if e.phase == "playing" {
+			if e.lastPlay != nil {
+				return e.handlePlay(r, seat, "pass", nil)
+			}
+			// 自由出牌：出最小单张（手牌已按降序排列，取最后一张）
+			s := r.Seats[seat]
+			if len(s.Hand) == 0 {
+				return nil
+			}
+			minCard := s.Hand[len(s.Hand)-1]
+			return e.handlePlay(r, seat, "play", ActionData{"cards": []interface{}{minCard}})
+		}
+	}
 	if e.phase == "callLandlord" {
 		return e.handleCall(r, seat, action, data)
 	}

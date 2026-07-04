@@ -265,6 +265,10 @@ func (e *zjhEngine) HandleAction(r *Room, seat int, action string, data ActionDa
 		return []Event{{Type: "error", Data: ActionData{"msg": "还没轮到你"}, Target: seat}}
 	}
 	s := r.Seats[seat]
+	// 出牌超时：统一弃牌，避免玩家挂机整局卡死
+	if action == "timeout" {
+		action = "fold"
+	}
 	switch action {
 	case "look":
 		if e.blindMode {

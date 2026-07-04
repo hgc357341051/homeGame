@@ -443,6 +443,20 @@ func (e *nnEngine) settleByFold(r *Room) []Event {
 }
 
 func (e *nnEngine) HandleAction(r *Room, seat int, action string, data ActionData) []Event {
+	// 出牌超时：押注阶段筹码够则跟注，不够则弃牌；凑牛阶段自动选最佳
+	if action == "timeout" {
+		if e.phase == "betting" {
+			s := r.Seats[seat]
+			if s.Chips >= e.currentBet {
+				action = "call"
+			} else {
+				action = "fold"
+			}
+		} else if e.phase == "setNiu" {
+			// 凑牛超时：自动选最佳，传空 cards 走自动路径
+			return e.handleSetNiu(r, seat, "niuniuSet", ActionData{})
+		}
+	}
 	if e.phase == "betting" {
 		return e.handleBetting(r, seat, action, data)
 	}
