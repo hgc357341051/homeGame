@@ -1435,6 +1435,51 @@ function onKeydown(e: KeyboardEvent) {
   display: none;
 }
 
+/* 横屏手机/低高度设备：高度受限时缩小牌桌与手牌区，避免座位与手牌重叠裁切 */
+@media (orientation: landscape) and (max-height: 500px) {
+  .felt-table {
+    min-height: 240px;
+    border-radius: 18px;
+  }
+  .felt-inner {
+    border-radius: 12px;
+  }
+  .table-emblem {
+    font-size: 0.85rem;
+  }
+  .emblem-suit {
+    font-size: 1.1rem;
+  }
+  .my-hand-wrap {
+    min-height: 70px;
+  }
+  .my-area {
+    padding: 0.3rem 0.5rem 0.4rem;
+    gap: 0.25rem;
+  }
+  /* 座位在低高度下进一步紧凑，避免落到可视区外 */
+  .room-header {
+    padding: 0.3rem 0.6rem;
+  }
+  .game-icon {
+    font-size: 1.3rem;
+  }
+  .game-name {
+    font-size: 0.85rem;
+  }
+}
+/* 翻转模式（JS 强制横屏）同样应用低高度优化 */
+.room-page.landscape-rotate .felt-table {
+  min-height: 240px;
+}
+.room-page.landscape-rotate .my-hand-wrap {
+  min-height: 70px;
+}
+.room-page.landscape-rotate .my-area {
+  padding: 0.3rem 0.5rem 0.4rem;
+  gap: 0.25rem;
+}
+
 @media (max-width: 900px) {
   .chat-sidebar {
     display: none;

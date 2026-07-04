@@ -298,7 +298,12 @@ export const useGameStore = defineStore('game', () => {
           myHand.value = Array.from({ length: d.cardCount }, () => ({ suit: '', rank: '?', value: 0 }))
         } else if (d.blindMode && d.cards && d.index !== undefined) {
           // 蒙牌模式：逐张看牌，更新指定位置
+          // 兜底：若占位手牌尚未初始化（重连乱序/初始化包丢失），用 cardCount 先建占位数组
           const idx = d.index as number
+          if (!myHand.value || myHand.value.length === 0) {
+            const cnt = (d.cardCount as number) || (d.cards as Card[]).length
+            myHand.value = Array.from({ length: Math.max(cnt, idx + 1) }, () => ({ suit: '', rank: '?', value: 0 }))
+          }
           if (myHand.value[idx]) {
             myHand.value[idx] = (d.cards as Card[])[0]
             myHand.value = [...myHand.value]
