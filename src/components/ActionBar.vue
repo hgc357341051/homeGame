@@ -56,7 +56,8 @@ function toggleBlindMode(e: Event) {
 const pickingCompare = ref(false)
 const compareTargets = computed<SeatView[]>(() => {
   if (!room.value || room.value.game !== 'zjh') return []
-  return room.value.seats.filter((s) => s.playerId && !s.isFolded && s.seat !== room.value!.mySeat)
+  // 过滤掉自己、已弃牌、掉线玩家（掉线玩家无法响应比牌）
+  return room.value.seats.filter((s) => s.playerId && !s.isFolded && !s.offline && s.seat !== room.value!.mySeat)
 })
 
 // 回合变化时复位比牌面板，避免显示过期目标（已弃牌/离场玩家）

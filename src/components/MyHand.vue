@@ -18,8 +18,9 @@ const emit = defineEmits<{ (e: 'change', selected: Card[]): void }>()
 const selectedKeys = ref<Set<string>>(new Set())
 
 // 牌变化时（发牌/换局）清空选择并通知父组件，避免残留上一轮选择
+// 比较牌内容（cardKey 拼接）而非引用，避免重连同步引用替换但内容未变时误清选中
 watch(
-  () => props.cards,
+  () => props.cards.map((c) => cardKey(c)).join(','),
   () => {
     if (selectedKeys.value.size > 0) {
       selectedKeys.value = new Set()

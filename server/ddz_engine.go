@@ -248,8 +248,23 @@ func (e *ddzEngine) advanceTurn(r *Room) {
 		e.lastPlayAnalysis = nil
 		e.passCount = 0
 		e.currentSeat = e.lastPlayerIdx
+		// 若自由出牌者已掉线，跳到下一在线玩家，避免回合卡死
+		if r.Seats[e.occupied[e.currentSeat]].Client == nil {
+			e.advanceToNextOnline(r)
+		}
 	} else {
-		e.currentSeat = (e.currentSeat + 1) % len(e.occupied)
+		e.advanceToNextOnline(r)
+	}
+}
+
+// advanceToNextOnline 推进到下一个在线玩家，跳过掉线（Client==nil）的座位
+func (e *ddzEngine) advanceToNextOnline(r *Room) {
+	n := len(e.occupied)
+	for i := 0; i < n; i++ {
+		e.currentSeat = (e.currentSeat + 1) % n
+		if r.Seats[e.occupied[e.currentSeat]].Client != nil {
+			return
+		}
 	}
 }
 

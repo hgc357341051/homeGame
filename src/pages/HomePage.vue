@@ -103,7 +103,7 @@ const rules: Record<GameCode, string[]> = {
     <!-- 昵称 -->
     <section class="name-row glass">
       <label>你的昵称</label>
-      <input :value="name" @input="name = ($event.target as HTMLInputElement).value" @blur="commitName" @keydown.enter="commitName" maxlength="12" placeholder="输入昵称" />
+      <input :value="name" @input="name = ($event.target as HTMLInputElement).value" @blur="commitName" @keydown.enter="commitName" maxlength="16" placeholder="输入昵称" />
     </section>
 
     <!-- 游戏卡片 -->

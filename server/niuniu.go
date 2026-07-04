@@ -355,7 +355,11 @@ func (e *nnEngine) nextActive(r *Room) {
 func (e *nnEngine) bettingRoundComplete(r *Room) bool {
 	for i := 0; i < e.totalSeats; i++ {
 		s := r.Seats[e.occupied[i]]
-		if !s.IsFolded && !e.actedThisRound[i] {
+		// 跳过已弃牌和掉线玩家（掉线玩家无法行动，不应阻塞押注完成判断）
+		if s.IsFolded || s.Client == nil {
+			continue
+		}
+		if !e.actedThisRound[i] {
 			return false
 		}
 	}
