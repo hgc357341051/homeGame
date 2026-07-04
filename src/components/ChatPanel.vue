@@ -44,8 +44,9 @@ onMounted(async () => {
   if (listRef.value) listRef.value.scrollTop = listRef.value.scrollHeight
 })
 
+// 监听最后一条消息的 ts：列表封顶后 length 不变，但 ts 持续递增，确保新消息仍触发滚动
 watch(
-  () => items.value.length,
+  () => (items.value.length > 0 ? items.value[items.value.length - 1].ts : 0),
   async () => {
     await nextTick()
     if (listRef.value) listRef.value.scrollTop = listRef.value.scrollHeight

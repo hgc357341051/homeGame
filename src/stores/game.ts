@@ -30,6 +30,9 @@ export const useGameStore = defineStore('game', () => {
   const failed = ref(false) // 重连彻底失败，需用户手动刷新
   const isOnline = ref(navigator.onLine) // 网络在线状态（断网立即提示）
   const reconnectAttemptCount = ref(0) // 当前重连次数（用于显示进度 N/8）
+  // 房间不可达错误：joinRoom 失败（房间不存在/已解散）或重连后房间消失
+  // 区别于普通 error toast，此状态会让 RoomPage 停止 loading 并显示返回首页按钮
+  const roomError = ref<string>('')
 
   const room = ref<RoomState | null>(null)
   const myHand = ref<Card[]>([])
@@ -263,6 +266,8 @@ export const useGameStore = defineStore('game', () => {
     intentionalClose = false
     failed.value = false
     reconnectAttempts = 0
+    // 清除上一次的房间不可达错误（重试或进入新房间）
+    roomError.value = ''
     send('joinRoom', { code })
   }
 
@@ -364,6 +369,11 @@ export const useGameStore = defineStore('game', () => {
       case 'error':
         showError(d.msg || '操作失败')
         sfxError()
+        // 若 room 尚未加载（joinRoom 失败/重连回已解散房间），记录为房间不可达
+        // 让 RoomPage 停止永久 loading 并提供返回首页入口
+        if (!room.value) {
+          roomError.value = d.msg || '房间不可用'
+        }
         break
     }
   }
@@ -399,6 +409,7 @@ export const useGameStore = defineStore('game', () => {
     log.value = []
     // 清理残留错误提示与定时器
     errorToast.value = ''
+    roomError.value = ''
     if (errorTimer) { clearTimeout(errorTimer); errorTimer = null }
   }
 
@@ -421,6 +432,7 @@ export const useGameStore = defineStore('game', () => {
     failed,
     isOnline,
     reconnectAttemptCount,
+    roomError,
     room,
     myHand,
     chat,

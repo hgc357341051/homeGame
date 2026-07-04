@@ -74,6 +74,8 @@ function toggle(c: Card) {
   emitChange()
 }
 
+// 拖拽起始：立即选中/取消起始牌并记录模式，供后续 mouseenter/touchmove 连续处理
+// 注意：不再绑定 @click，单击选中完全由 mousedown 完成，避免 mousedown+click 重复翻转
 function onDragStart(c: Card, e: MouseEvent) {
   if (!props.selectable) return
   // 仅左键触发
@@ -104,8 +106,10 @@ function stopDrag() {
 }
 
 // 触摸滑动多选（移动端）：通过 elementFromPoint 命中牌
+// preventDefault 阻止浏览器合成 click 事件，避免与 mousedown 逻辑重复翻转选中态
 function onTouchStart(c: Card, e: TouchEvent) {
   if (!props.selectable) return
+  e.preventDefault()
   dragging.value = true
   dragMode.value = selectedKeys.value.has(cardKey(c)) ? 'deselect' : 'select'
   applyDrag(c)
@@ -164,7 +168,6 @@ defineExpose({
         :data-idx="i"
         :class="{ sel: isSelected(c) }"
         :style="{ zIndex: i, marginLeft: i === 0 ? '0' : overlapPx + 'px' }"
-        @click="toggle(c)"
         @mousedown="onDragStart(c, $event)"
         @mouseenter="onDragEnter(c)"
         @touchstart="onTouchStart(c, $event)"

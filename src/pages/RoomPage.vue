@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { useGameStore } from '@/stores/game'
 import { GAME_META, type Card, type SeatView } from '@/types'
 import { soundEnabled, vibrateEnabled, setSound, setVibrate, sfxTurn } from '@/utils/feedback'
@@ -12,6 +13,7 @@ import PlayingCard from '@/components/PlayingCard.vue'
 
 const props = defineProps<{ code: string }>()
 const store = useGameStore()
+const router = useRouter()
 
 const selectedCards = ref<Card[]>([])
 const handRef = ref<{ clear: () => void } | null>(null)
@@ -176,6 +178,17 @@ async function joinRoom() {
   } catch {
     /* 错误已由 store 提示 */
   }
+}
+
+// 房间不可达时重试：重新连接并 joinRoom
+async function retryJoin() {
+  store.roomError = ''
+  await joinRoom()
+}
+
+// 返回首页：由路由守卫统一 cleanupRoom
+function backHome() {
+  router.push('/')
 }
 
 function copyCode() {
@@ -386,10 +399,21 @@ function onKeydown(e: KeyboardEvent) {
       </div>
     </header>
 
-    <!-- 加载态 -->
+    <!-- 加载态 / 房间不可达 -->
     <div v-if="!room" class="loading">
-      <div class="deal-spinner">🎴</div>
-      <div class="loading-text">正在进入房间 {{ code.toUpperCase() }}…</div>
+      <template v-if="store.roomError">
+        <div class="err-icon">🚪</div>
+        <div class="err-title">{{ store.roomError }}</div>
+        <div class="err-sub">房间可能已解散或配对码有误</div>
+        <div class="err-actions">
+          <button class="btn btn-gold" @click="retryJoin">重试</button>
+          <button class="btn btn-ghost" @click="backHome">返回首页</button>
+        </div>
+      </template>
+      <template v-else>
+        <div class="deal-spinner">🎴</div>
+        <div class="loading-text">正在进入房间 {{ code.toUpperCase() }}…</div>
+      </template>
     </div>
 
     <!-- 主体 -->
@@ -792,6 +816,27 @@ function onKeydown(e: KeyboardEvent) {
   color: var(--ivory-dim);
   font-size: 0.95rem;
   letter-spacing: 0.1em;
+}
+.err-icon {
+  font-size: 3.5rem;
+  opacity: 0.8;
+}
+.err-title {
+  font-family: var(--font-zh);
+  font-weight: 700;
+  font-size: 1.2rem;
+  color: var(--wine-2);
+  text-align: center;
+  max-width: 320px;
+}
+.err-sub {
+  color: var(--ivory-dim);
+  font-size: 0.85rem;
+}
+.err-actions {
+  display: flex;
+  gap: 0.8rem;
+  margin-top: 0.5rem;
 }
 
 /* ===== 主体 ===== */
