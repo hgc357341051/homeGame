@@ -256,9 +256,19 @@ func (rm *RoomManager) joinRoom(c *Client, data ActionData) {
 				break
 			}
 		}
+		// 重连补发：若对局中且轮到该玩家，补发 turn 事件，否则客户端 turn 状态为陈旧值
+		// （broadcastState 只发 roomState + deal，不发 turn）
+		var turnEv *Event
+		seatIdx := room.findSeat(c.playerID)
+		if seatIdx >= 0 && room.Phase == "playing" && room.Engine != nil {
+			turnEv = room.Engine.CurrentTurnEvent(room, seatIdx)
+		}
 		room.mu.Unlock()
 		c.sendMsg(Message{Type: "joined", Data: ActionData{"code": code, "reclaimed": true}})
 		room.broadcastState()
+		if turnEv != nil {
+			c.sendMsg(Message{Type: turnEv.Type, Data: turnEv.Data})
+		}
 		return
 	}
 	// 已在该房间旁观则不重复加入（防止重复 joinRoom 导致消息重复）

@@ -67,6 +67,9 @@ type GameEngine interface {
 	PlayerHand(s *Seat) []Card
 	// OnSeatVacated 当座位被腾空（踢人/超时）时调用，引擎推进回合或结算
 	OnSeatVacated(r *Room, seat int) []Event
+	// CurrentTurnEvent 返回指定座位当前的 turn 事件（用于重连后补发）；
+	// 若该座位当前无需操作则返回 nil
+	CurrentTurnEvent(r *Room, seat int) *Event
 }
 
 // Room 一个游戏房间

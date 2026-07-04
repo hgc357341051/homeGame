@@ -339,6 +339,31 @@ func (e *nnEngine) turnEvent(r *Room) Event {
 	}, Target: -1}
 }
 
+// CurrentTurnEvent 返回指定座位当前的 turn 事件（重连后补发用）
+func (e *nnEngine) CurrentTurnEvent(r *Room, seat int) *Event {
+	if e.phase == "betting" {
+		for i, s := range e.occupied {
+			if s == seat && i == e.currentSeat {
+				ev := e.turnEvent(r)
+				return &ev
+			}
+		}
+		return nil
+	}
+	if e.phase == "setNiu" {
+		// 凑牛阶段：所有未弃牌、未凑牛的玩家均可操作
+		s := r.Seats[seat]
+		if s == nil || s.IsFolded || s.HasNiu || !s.occupied() {
+			return nil
+		}
+		ev := Event{Type: "turn", Data: ActionData{
+			"seat": seat, "phase": "setNiu", "actions": []string{"niuniuSet"},
+		}, Target: -1}
+		return &ev
+	}
+	return nil
+}
+
 func (e *nnEngine) nextActive(r *Room) {
 	n := len(e.occupied)
 	for i := 0; i < n; i++ {

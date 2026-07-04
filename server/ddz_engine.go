@@ -285,6 +285,28 @@ func (e *ddzEngine) turnEvent() Event {
 	}, Target: -1}
 }
 
+// CurrentTurnEvent 返回指定座位当前的 turn 事件（重连后补发用）
+func (e *ddzEngine) CurrentTurnEvent(r *Room, seat int) *Event {
+	if e.phase == "callLandlord" {
+		if e.seatIdxInOccupied(seat) == e.callIdx {
+			ev := Event{Type: "turn", Data: ActionData{
+				"seat":    e.occupied[e.callIdx],
+				"phase":   "callLandlord",
+				"actions": []string{"callLandlord"},
+			}, Target: -1}
+			return &ev
+		}
+		return nil
+	}
+	if e.phase == "playing" {
+		if e.seatIdxInOccupied(seat) == e.currentSeat {
+			ev := e.turnEvent()
+			return &ev
+		}
+	}
+	return nil
+}
+
 func (e *ddzEngine) settle(r *Room, winnerSeat int) []Event {
 	e.phase = "settled"
 	// 地主赢 or 农民赢

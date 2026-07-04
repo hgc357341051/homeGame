@@ -303,6 +303,23 @@ export const useGameStore = defineStore('game', () => {
         break
       case 'roomState':
         room.value = d
+        // 重连后 turn 状态可能陈旧（服务端只在对局中且轮到自己时补发 turn 事件）。
+        // 从 publicArea.currentSeat 同步最小 turn 信息，确保 isMyTurn 判断正确；
+        // 完整 actions/callCost 等字段由后续 turn 事件补全。
+        if (d.publicArea && d.publicArea.currentSeat !== undefined && d.phase === 'playing') {
+          const cs = d.publicArea.currentSeat as number
+          if (!turn.value || turn.value.seat !== cs) {
+            turn.value = {
+              seat: cs,
+              phase: (d.publicArea.phase as string) || 'playing',
+              actions: [],
+            }
+            // 非自己回合：清空倒计时，避免陈旧的 deadline 触发倒计时显示
+            if (cs !== d.mySeat) {
+              turnDeadline.value = 0
+            }
+          }
+        }
         break
       case 'deal':
         if (d.blindMode && d.cardCount && !d.cards) {

@@ -202,6 +202,20 @@ func (e *zjhEngine) turnEvent(r *Room) Event {
 	}, Target: -1}
 }
 
+// CurrentTurnEvent 返回指定座位当前的 turn 事件（重连后补发用）
+func (e *zjhEngine) CurrentTurnEvent(r *Room, seat int) *Event {
+	if e.phase != "betting" {
+		return nil
+	}
+	for i, s := range e.occupied {
+		if s == seat && i == e.currentSeat {
+			ev := e.turnEvent(r)
+			return &ev
+		}
+	}
+	return nil
+}
+
 func (e *zjhEngine) Start(r *Room) []Event {
 	e.reset()
 	e.blindMode = r.BlindMode
