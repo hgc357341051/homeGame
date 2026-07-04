@@ -25,7 +25,23 @@ const landscapeMode = ref(false)
 const shareOpen = ref(false)
 // 设置面板：音效/振动开关
 const settingsOpen = ref(false)
+// 快捷表情/短语浮窗：游戏内一键互动，无需打开完整聊天面板
+const quickOpen = ref(false)
 let revealTimer: any = null
+
+// 快捷互动内容：表情用于即时反应，短语用于常见沟通
+const quickEmojis = ['😀', '😎', '🤔', '😏', '😂', '😢', '😡', '😱', '👍', '👏', '🙏', '💪', '🔥', '💥', '🎉', '🍀']
+const quickPhrases = ['快出牌呀', '稳住能赢', '好牌！', '我要炸了', '让我想想', '别走啊', '再来一局', '打得好']
+
+// 快捷互动发送：复用 chat 通道，自带 300ms 防抖避免刷屏
+let lastQuickSent = 0
+function sendQuick(text: string) {
+  const now = Date.now()
+  if (now - lastQuickSent < 300) return
+  lastQuickSent = now
+  store.send('chat', { text })
+  quickOpen.value = false
+}
 
 const room = computed(() => store.room)
 const phase = computed(() => room.value?.phase)
@@ -243,13 +259,83 @@ onMounted(() => {
   }
   checkMobile()
   window.addEventListener('resize', checkMobile)
+  window.addEventListener('keydown', onKeydown)
   joinRoom()
 })
 
 onUnmounted(() => {
   if (revealTimer) clearTimeout(revealTimer)
   window.removeEventListener('resize', checkMobile)
+  window.removeEventListener('keydown', onKeydown)
 })
+
+// 键盘快捷键：提升桌面端出牌效率
+// 回车=出牌/确认/再来一局，空格=不要/关闭弹窗，R=准备，Esc=关闭弹窗
+function onKeydown(e: KeyboardEvent) {
+  // 输入框聚焦时不拦截
+  const tag = (e.target as HTMLElement)?.tagName
+  if (tag === 'INPUT' || tag === 'TEXTAREA') return
+  // 弹窗优先级最高
+  if (store.settle) {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      if (store.isOwner) store.send('start')
+      store.clearSettle()
+    } else if (e.key === 'Escape') {
+      store.clearSettle()
+    }
+    return
+  }
+  if (revealVisible.value) {
+    if (e.key === 'Escape' || e.key === ' ' || e.key === 'Enter') {
+      e.preventDefault()
+      revealVisible.value = false
+    }
+    return
+  }
+  if (shareOpen.value || settingsOpen.value || chatOpen.value || quickOpen.value) {
+    if (e.key === 'Escape') {
+      shareOpen.value = false
+      settingsOpen.value = false
+      chatOpen.value = false
+      quickOpen.value = false
+    }
+    return
+  }
+  // 等待阶段：R 切换准备
+  if (phase.value === 'waiting' && mySeatView.value && (e.key === 'r' || e.key === 'R')) {
+    e.preventDefault()
+    store.send('ready')
+    return
+  }
+  // 自己回合：回车=主操作（出牌/跟注/确认），空格=不要/弃牌
+  if (!store.isMyTurn && !(game.value === 'nn' && store.turn?.phase === 'setNiu' && mySeatView.value && !mySeatView.value.hasNiu)) return
+  const t = store.turn
+  if (!t) return
+  if (e.key === 'Enter') {
+    e.preventDefault()
+    if (game.value === 'ddz' && t.phase === 'playing') {
+      if (selectedCards.value.length > 0) store.send('play', { cards: selectedCards.value })
+    } else if (game.value === 'ddz' && t.phase === 'callLandlord') {
+      store.send('callLandlord', { call: true })
+    } else if (game.value === 'zjh' && t.phase === 'betting') {
+      store.send('call', {})
+    } else if (game.value === 'nn' && t.phase === 'betting') {
+      store.send('call', {})
+    } else if (game.value === 'nn' && t.phase === 'setNiu' && mySeatView.value && !mySeatView.value.hasNiu) {
+      store.send('niuniuSet', selectedCards.value.length === 3 ? { cards: selectedCards.value } : {})
+    }
+  } else if (e.key === ' ') {
+    e.preventDefault()
+    if (game.value === 'ddz' && t.phase === 'playing') {
+      if (room.value?.publicArea.lastPlay) store.send('pass', {})
+    } else if (game.value === 'ddz' && t.phase === 'callLandlord') {
+      store.send('callLandlord', { call: false })
+    } else if ((game.value === 'zjh' || game.value === 'nn') && t.phase === 'betting') {
+      store.send('fold', {})
+    }
+  }
+}
 </script>
 
 <template>
@@ -269,8 +355,10 @@ onUnmounted(() => {
       </div>
       <div class="header-actions">
         <div class="conn-status">
-          <span class="dot" :class="{ on: store.connected, reconnect: store.reconnecting, fail: store.failed }" />
-          <span class="conn-text">{{ store.failed ? '已断开' : (store.reconnecting ? '重连中…' : (store.connected ? '在线' : '连接中…')) }}</span>
+          <span class="dot" :class="{ on: store.connected, reconnect: store.reconnecting, fail: store.failed || !store.isOnline }" />
+          <span class="conn-text">
+            {{ !store.isOnline ? '网络已断开' : (store.failed ? '已断开' : (store.reconnecting ? `重连中 ${store.reconnectAttemptCount}/${8}…` : (store.connected ? '在线' : '连接中…'))) }}
+          </span>
         </div>
         <button
           v-if="isMobile"
@@ -287,6 +375,13 @@ onUnmounted(() => {
           title="设置"
         >⚙</button>
         <button class="btn btn-ghost leave-btn" @click="leave">离开房间</button>
+        <button
+          class="btn btn-ghost icon-btn quick-fab"
+          :class="{ active: quickOpen }"
+          @click="quickOpen = !quickOpen"
+          aria-label="快捷互动"
+          title="快捷表情/短语"
+        >😀</button>
         <button class="btn btn-ghost chat-fab" @click="chatOpen = !chatOpen" aria-label="消息">💬</button>
       </div>
     </header>
@@ -529,6 +624,36 @@ onUnmounted(() => {
           <div class="setting-note">设置自动保存，下次访问仍生效</div>
           <div class="share-actions">
             <button class="btn btn-gold" @click="settingsOpen = false">完成</button>
+          </div>
+        </div>
+      </div>
+    </transition>
+
+    <!-- 快捷表情/短语浮窗：游戏内即时互动，点击遮罩或 Esc 关闭 -->
+    <transition name="fade">
+      <div v-if="quickOpen" class="quick-overlay" @click="quickOpen = false">
+        <div class="quick-pop gold-border" @click.stop>
+          <div class="quick-section">
+            <div class="quick-label">表情</div>
+            <div class="emoji-grid">
+              <button
+                v-for="e in quickEmojis"
+                :key="e"
+                class="emoji-btn"
+                @click="sendQuick(e)"
+              >{{ e }}</button>
+            </div>
+          </div>
+          <div class="quick-section">
+            <div class="quick-label">短语</div>
+            <div class="phrase-grid">
+              <button
+                v-for="p in quickPhrases"
+                :key="p"
+                class="phrase-btn"
+                @click="sendQuick(p)"
+              >{{ p }}</button>
+            </div>
           </div>
         </div>
       </div>
@@ -1120,6 +1245,84 @@ onUnmounted(() => {
   font-size: 0.75rem;
   color: var(--muted);
   margin: 0.5rem 0 1rem;
+}
+
+/* ===== 快捷表情/短语浮窗 ===== */
+.quick-fab {
+  font-size: 1.1rem;
+}
+.quick-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(3, 12, 8, 0.55);
+  backdrop-filter: blur(3px);
+  padding: 1rem;
+}
+.quick-pop {
+  border-radius: 16px;
+  padding: 1.1rem 1.2rem;
+  width: min(360px, 92vw);
+  background: var(--ink-2);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+}
+.quick-section + .quick-section {
+  margin-top: 0.9rem;
+}
+.quick-label {
+  font-size: 0.72rem;
+  color: var(--ivory-dim);
+  letter-spacing: 0.15em;
+  margin-bottom: 0.5rem;
+}
+.emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 0.25rem;
+}
+.emoji-btn {
+  font-size: 1.4rem;
+  padding: 0.25rem 0;
+  border-radius: 8px;
+  background: rgba(20, 80, 60, 0.25);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.12s ease;
+  line-height: 1.2;
+}
+.emoji-btn:hover {
+  background: rgba(212, 175, 55, 0.15);
+  border-color: rgba(212, 175, 55, 0.4);
+  transform: scale(1.12);
+}
+.emoji-btn:active {
+  transform: scale(0.95);
+}
+.phrase-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.phrase-btn {
+  font-size: 0.82rem;
+  padding: 0.35rem 0.7rem;
+  border-radius: 999px;
+  background: rgba(20, 80, 60, 0.35);
+  border: 1px solid rgba(212, 175, 55, 0.3);
+  color: var(--ivory);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.phrase-btn:hover {
+  background: rgba(212, 175, 55, 0.18);
+  border-color: var(--gold);
+  color: var(--gold-soft);
+}
+.phrase-btn:active {
+  transform: scale(0.96);
 }
 
 /* ===== 过渡 ===== */

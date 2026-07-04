@@ -7,9 +7,14 @@ onMounted(() => {
   store.connect().catch(() => {})
   // 监听可见性变化：切后台回前台时主动检测/重连
   document.addEventListener('visibilitychange', store.handleVisibilityChange)
+  // 监听网络在线状态：断网立即提示，恢复后立即重连
+  window.addEventListener('online', store.handleOnline)
+  window.addEventListener('offline', store.handleOffline)
 })
 onUnmounted(() => {
   document.removeEventListener('visibilitychange', store.handleVisibilityChange)
+  window.removeEventListener('online', store.handleOnline)
+  window.removeEventListener('offline', store.handleOffline)
 })
 </script>
 

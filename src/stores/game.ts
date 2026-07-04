@@ -28,6 +28,8 @@ export const useGameStore = defineStore('game', () => {
   const connecting = ref(false)
   const reconnecting = ref(false)
   const failed = ref(false) // 重连彻底失败，需用户手动刷新
+  const isOnline = ref(navigator.onLine) // 网络在线状态（断网立即提示）
+  const reconnectAttemptCount = ref(0) // 当前重连次数（用于显示进度 N/8）
 
   const room = ref<RoomState | null>(null)
   const myHand = ref<Card[]>([])
@@ -91,6 +93,22 @@ export const useGameStore = defineStore('game', () => {
     }
   }
 
+  // 网络在线状态变化：断网立即提示，恢复后立即重连
+  function handleOnline() {
+    isOnline.value = true
+    if (joinedCode && !intentionalClose) {
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        reconnectAttempts = 0
+        failed.value = false
+        scheduleReconnect()
+      }
+    }
+  }
+  function handleOffline() {
+    isOnline.value = false
+    showError('网络已断开，请检查网络连接')
+  }
+
   // 断线自动重连：递增退避 + jitter，重连成功后自动重新 joinRoom 夺回座位
   function scheduleReconnect() {
     if (reconnectTimer) return
@@ -107,6 +125,7 @@ export const useGameStore = defineStore('game', () => {
     }
     reconnecting.value = true
     reconnectAttempts++
+    reconnectAttemptCount.value = reconnectAttempts
     // 退避 + 随机 jitter，避免多客户端同时断线后雷同重连
     const delay = Math.min(1000 * reconnectAttempts, 5000) + Math.random() * 300
     reconnectTimer = setTimeout(async () => {
@@ -158,6 +177,7 @@ export const useGameStore = defineStore('game', () => {
         reconnecting.value = false
         failed.value = false
         reconnectAttempts = 0
+        reconnectAttemptCount.value = 0
         intentionalClose = false
         // 成功后清理超时定时器，避免累积未决定时器
         if (timeoutTimer) { clearTimeout(timeoutTimer); timeoutTimer = null }
@@ -399,6 +419,8 @@ export const useGameStore = defineStore('game', () => {
     connecting,
     reconnecting,
     failed,
+    isOnline,
+    reconnectAttemptCount,
     room,
     myHand,
     chat,
@@ -422,5 +444,7 @@ export const useGameStore = defineStore('game', () => {
     seatName,
     kickSeat,
     handleVisibilityChange,
+    handleOnline,
+    handleOffline,
   }
 })

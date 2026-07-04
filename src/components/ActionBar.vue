@@ -2,6 +2,7 @@
 import { ref, computed, watch } from 'vue'
 import type { Card, SeatView } from '@/types'
 import { useGameStore } from '@/stores/game'
+import { identifyDDZPlay } from '@/utils/ddzTypes'
 
 const props = defineProps<{ selectedCards: Card[] }>()
 const store = useGameStore()
@@ -12,6 +13,13 @@ const turn = computed(() => store.turn)
 const isMyTurn = computed(() => turn.value?.seat === room.value?.mySeat && phase.value === 'playing')
 const mySeat = computed(() => room.value?.seats[room.value?.mySeat ?? -1])
 const isOwner = computed(() => store.isOwner)
+
+// DDZ 选中牌的牌型识别提示（仅显示，校验仍由服务端负责）
+const ddzPlayType = computed(() => {
+  if (room.value?.game !== 'ddz' || !isMyTurn.value || turn.value?.phase !== 'playing') return null
+  if (props.selectedCards.length === 0) return null
+  return identifyDDZPlay(props.selectedCards)
+})
 
 const readyCount = computed(() => {
   if (!room.value) return 0
@@ -133,6 +141,7 @@ function niuniuConfirm() {
 
     <!-- 斗地主出牌 -->
     <template v-else-if="isMyTurn && room?.game === 'ddz' && turn?.phase === 'playing'">
+      <span v-if="ddzPlayType" class="play-type" :class="{ invalid: !ddzPlayType.valid }">{{ ddzPlayType.name }}</span>
       <button class="btn btn-gold" :disabled="selectedCards.length === 0 || acting" @click="playCards">
         出牌 ({{ selectedCards.length }})
       </button>
@@ -225,6 +234,21 @@ function niuniuConfirm() {
   color: var(--gold-soft);
   font-size: 0.9rem;
   font-weight: 500;
+}
+.play-type {
+  padding: 0.25rem 0.7rem;
+  border-radius: 8px;
+  background: rgba(212, 175, 55, 0.15);
+  border: 1px solid rgba(212, 175, 55, 0.4);
+  color: var(--gold);
+  font-size: 0.82rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.play-type.invalid {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.4);
+  color: #ff9b9b;
 }
 .hint {
   color: var(--ivory-dim);

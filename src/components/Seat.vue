@@ -22,6 +22,11 @@ const statusBadge = computed(() => {
 
 const empty = computed(() => !props.seat.playerId)
 
+// 等待阶段：已入座但未准备的玩家显示"未准备"灰字，便于房主判断是否可开局
+const showNotReady = computed(() =>
+  store.room?.phase === 'waiting' && !empty.value && !props.seat.ready && !props.seat.offline,
+)
+
 // 本地掉线倒计时：服务端只在 broadcastState 时下发 offlineLeft，
 // 客户端每秒自减以保证 UI 连续刷新（避免在无广播时卡住）
 const localOfflineLeft = ref(0)
@@ -101,6 +106,7 @@ function renameSeat() {
         <span class="card-cnt" v-if="seat.cardCount > 0">🂠 {{ seat.cardCount }}</span>
         <span class="bet" v-if="seat.currentBet">注 {{ seat.currentBet }}</span>
         <span class="ready" v-if="seat.ready">✓ 已准备</span>
+        <span class="not-ready" v-else-if="showNotReady">未准备</span>
       </div>
       <div class="niu" v-if="seat.hasNiu">牛 {{ seat.niuValue === 0 ? '没' : (seat.niuValue === 10 ? '牛' : seat.niuValue) }}</div>
     </div>
@@ -262,6 +268,14 @@ function renameSeat() {
 }
 .ready {
   color: #4ade80;
+}
+.not-ready {
+  color: #fb923c;
+  font-size: 0.68rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 5px;
+  background: rgba(251, 146, 60, 0.12);
+  border: 1px solid rgba(251, 146, 60, 0.35);
 }
 .niu {
   font-size: 0.7rem;
