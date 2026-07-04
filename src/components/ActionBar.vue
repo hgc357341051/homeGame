@@ -14,6 +14,26 @@ const isMyTurn = computed(() => turn.value?.seat === room.value?.mySeat && phase
 const mySeat = computed(() => room.value?.seats[room.value?.mySeat ?? -1])
 const isOwner = computed(() => store.isOwner)
 
+// 出牌倒计时：服务端 30s 超时，客户端每秒刷新剩余秒数
+const now = ref(Date.now())
+let tickTimer: ReturnType<typeof setInterval> | null = null
+const turnSecondsLeft = computed(() => {
+  if (!store.turnDeadline || !isMyTurn.value) return 0
+  const left = Math.ceil((store.turnDeadline - now.value) / 1000)
+  return left > 0 ? left : 0
+})
+watch(isMyTurn, (v) => {
+  if (v && !tickTimer) {
+    tickTimer = setInterval(() => { now.value = Date.now() }, 500)
+  } else if (!v && tickTimer) {
+    clearInterval(tickTimer)
+    tickTimer = null
+  }
+}, { immediate: true })
+onUnmounted(() => {
+  if (tickTimer) clearInterval(tickTimer)
+})
+
 // DDZ 选中牌的牌型识别提示（仅显示，校验仍由服务端负责）
 const ddzPlayType = computed(() => {
   if (room.value?.game !== 'ddz' || !isMyTurn.value || turn.value?.phase !== 'playing') return null
@@ -140,6 +160,12 @@ function niuniuConfirm() {
 
 <template>
   <div class="action-bar glass">
+    <!-- 出牌倒计时（仅轮到自己时显示，≤5s 变红提醒） -->
+    <span
+      v-if="isMyTurn && turnSecondsLeft > 0"
+      class="turn-countdown"
+      :class="{ urgent: turnSecondsLeft <= 5 }"
+    >⏱ {{ turnSecondsLeft }}s</span>
     <!-- 等待大厅阶段 -->
     <template v-if="phase === 'waiting'">
       <button v-if="mySeat && !mySeat.ready" class="btn btn-gold" :disabled="acting" @click="ready">准备</button>
@@ -253,6 +279,26 @@ function niuniuConfirm() {
   border-radius: 16px;
   min-height: 58px;
   flex-wrap: wrap;
+  position: relative;
+}
+.turn-countdown {
+  position: absolute;
+  left: 0.8rem;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--gold-soft);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.turn-countdown.urgent {
+  color: #ff6b6b;
+  animation: pulse 0.8s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
 }
 .prompt {
   color: var(--gold-soft);

@@ -120,13 +120,16 @@ func (e *ddzEngine) HandleAction(r *Room, seat int, action string, data ActionDa
 			if e.lastPlay != nil {
 				return e.handlePlay(r, seat, "pass", nil)
 			}
-			// 自由出牌：出最小单张（手牌已按降序排列，取最后一张）
+			// 自由出牌：出最小单张（手牌升序排列，取第一张）
 			s := r.Seats[seat]
 			if len(s.Hand) == 0 {
 				return nil
 			}
-			minCard := s.Hand[len(s.Hand)-1]
-			return e.handlePlay(r, seat, "play", ActionData{"cards": []interface{}{minCard}})
+			minCard := s.Hand[0]
+			// extractCards 通过 JSON 数字解析，Value 须为 float64（int 会被类型断言跳过导致 Value=0）
+			return e.handlePlay(r, seat, "play", ActionData{"cards": []interface{}{
+				map[string]interface{}{"suit": minCard.Suit, "rank": minCard.Rank, "value": float64(minCard.Value)},
+			}})
 		}
 	}
 	if e.phase == "callLandlord" {

@@ -402,6 +402,18 @@ func (r *Room) emitEvents(evs []Event) {
 	}
 	// 扫描 turn 事件，为对应座位启动出牌超时定时器（防挂机）
 	// NN setNiu 阶段会下发多个 turn 事件，每个座位独立计时
+	hasTurn := false
+	for _, e := range evs {
+		if e.Type == "turn" {
+			hasTurn = true
+			break
+		}
+	}
+	// 有新的 turn 事件时，先清除所有旧定时器，避免上一回合玩家的定时器泄漏后误触发
+	// （NN setNiu 例外：多个 turn 同时活跃，但每次进入 setNiu 都会重发全部 turn）
+	if hasTurn {
+		r.clearTurnTimers()
+	}
 	for _, e := range evs {
 		if e.Type != "turn" {
 			continue
@@ -459,7 +471,18 @@ func (r *Room) applyTimeout(seat int) {
 	}
 	evs := r.Engine.HandleAction(r, seat, "timeout", nil)
 	r.mu.Unlock()
-	r.emitEvents(evs)
+	// 超时是后台动作：若引擎返回 error（如玩家已自行操作、回合已推进），静默丢弃，不弹错误 toast
+	filtered := make([]Event, 0, len(evs))
+	for _, e := range evs {
+		if e.Type == "error" {
+			continue
+		}
+		filtered = append(filtered, e)
+	}
+	if len(filtered) == 0 {
+		return
+	}
+	r.emitEvents(filtered)
 	r.broadcastState()
 }
 

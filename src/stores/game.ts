@@ -38,6 +38,8 @@ export const useGameStore = defineStore('game', () => {
   const myHand = ref<Card[]>([])
   const chat = ref<ChatMsg[]>([])
   const turn = ref<{ seat: number; phase: string; actions: string[]; currentBet?: number; pot?: number; callCost?: number; blindMode?: boolean } | null>(null)
+  // 出牌倒计时截止时间戳（ms）：服务端 30s 超时，客户端显示剩余秒数
+  const turnDeadline = ref(0)
   const phaseMsg = ref<string>('')
   const log = ref<{ id: number; ts: number; text: string; kind: string }[]>([])
   const reveal = ref<any>(null)
@@ -332,10 +334,13 @@ export const useGameStore = defineStore('game', () => {
         break
       case 'turn':
         turn.value = d
-        // 轮到自己：振动 + 音效提示（移动端刚需，避免错过出牌）
+        // 轮到自己：设置倒计时截止（服务端 30s 超时）+ 振动 + 音效
         if (d.seat === room.value?.mySeat) {
+          turnDeadline.value = Date.now() + 30000
           vibrateTurn()
           sfxTurn()
+        } else {
+          turnDeadline.value = 0
         }
         break
       case 'phase':
@@ -418,6 +423,7 @@ export const useGameStore = defineStore('game', () => {
     myHand.value = []
     chat.value = []
     turn.value = null
+    turnDeadline.value = 0
     reveal.value = null
     settle.value = null
     phaseMsg.value = ''
@@ -452,6 +458,7 @@ export const useGameStore = defineStore('game', () => {
     myHand,
     chat,
     turn,
+    turnDeadline,
     phaseMsg,
     log,
     reveal,
