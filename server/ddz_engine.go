@@ -193,7 +193,7 @@ func (e *ddzEngine) handlePlay(r *Room, seat int, action string, data ActionData
 		e.passCount++
 		evs := []Event{{Type: "played", Data: ActionData{"seat": seat, "pass": true}, Target: -1}}
 		e.advanceTurn(r)
-		return evs
+		return append(evs, e.turnEvent())
 	}
 	if action != "play" {
 		return []Event{{Type: "error", Data: ActionData{"msg": "操作不支持"}, Target: seat}}
@@ -238,7 +238,7 @@ func (e *ddzEngine) handlePlay(r *Room, seat int, action string, data ActionData
 		return append(evs, e.settle(r, seat)...)
 	}
 	e.advanceTurn(r)
-	return evs
+	return append(evs, e.turnEvent())
 }
 
 func (e *ddzEngine) advanceTurn(r *Room) {
@@ -266,6 +266,20 @@ func (e *ddzEngine) advanceToNextOnline(r *Room) {
 			return
 		}
 	}
+}
+
+// turnEvent 生成出牌阶段的 turn 事件：自由出牌（lastPlay==nil）只允许 play，跟牌阶段允许 play/pass
+func (e *ddzEngine) turnEvent() Event {
+	actions := []string{"play", "pass"}
+	if e.lastPlay == nil {
+		actions = []string{"play"}
+	}
+	return Event{Type: "turn", Data: ActionData{
+		"seat":     e.occupied[e.currentSeat],
+		"phase":    "playing",
+		"actions":  actions,
+		"lastPlay": e.lastPlay != nil,
+	}, Target: -1}
 }
 
 func (e *ddzEngine) settle(r *Room, winnerSeat int) []Event {

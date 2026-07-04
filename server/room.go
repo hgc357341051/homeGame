@@ -740,6 +740,15 @@ func (r *Room) handleStart(c *Client, data ActionData) {
 		c.emitError("对局已在进行")
 		return
 	}
+	// 从结算阶段再来一局：自动重置所有在座玩家的准备状态为已准备，
+	// 避免房主点击"再来一局"后因无人准备被拒绝（前端 settled 阶段不显示准备按钮）
+	if r.Phase == "settled" {
+		for _, s := range r.Seats {
+			if s.occupied() {
+				s.Ready = true
+			}
+		}
+	}
 	n := 0
 	for _, s := range r.Seats {
 		if s.occupied() && s.Ready {
