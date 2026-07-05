@@ -249,8 +249,8 @@ onUnmounted(() => {
                   <!-- 上次出牌 -->
                   <div v-if="lastPlay" class="last-play">
                     <div class="area-label">
-                      <template v-if="lastPlay.pass">{{ seats[lastPlay.seat]?.name }} 不要</template>
-                      <template v-else>{{ seats[lastPlay.seat]?.name }} 出牌</template>
+                      <template v-if="lastPlay.pass">{{ seats[lastPlay.seat]?.name ?? '玩家' }} 不要</template>
+                      <template v-else>{{ seats[lastPlay.seat]?.name ?? '玩家' }} 出牌</template>
                     </div>
                     <div v-if="!lastPlay.pass" class="mini-cards">
                       <PlayingCard
@@ -703,7 +703,7 @@ onUnmounted(() => {
 .seat-slot.clickable {
   cursor: pointer;
 }
-.seat-slot.clickable:hover ::v-deep(.seat) {
+.seat-slot.clickable:hover :deep(.seat) {
   border-color: var(--gold);
   box-shadow: 0 0 16px var(--gold-glow);
   transform: translateY(-2px);

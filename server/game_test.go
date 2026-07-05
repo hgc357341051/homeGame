@@ -171,6 +171,8 @@ func TestDDZSettleConservation(t *testing.T) {
 }
 
 // 验证 M3 修复：牛牛结算筹码守恒
+// 结算前总财富 = sum(Chips) + pot（pot 是押注阶段已扣除的筹码）
+// 结算后总财富 = sum(Chips)（pot 已分配给赢家，清零）
 func TestNNSettleConservation(t *testing.T) {
 	r := &Room{Seats: []*Seat{
 		{Index: 0, PlayerID: "P0", Name: "P0", Chips: 5}, // 闲家筹码不足
@@ -186,10 +188,11 @@ func TestNNSettleConservation(t *testing.T) {
 	}
 	e.results[0] = nnResult{Level: 2, Value: 10, Multiplier: 4} // 闲家牛牛
 	e.results[1] = nnResult{Level: 2, Value: 0, Multiplier: 1}  // 庄家没牛
+	initialTotal := r.Seats[0].Chips + r.Seats[1].Chips + e.pot // 含底池的总财富
 	_ = e.settle(r)
 	total := r.Seats[0].Chips + r.Seats[1].Chips
-	if total != 5+1000 {
-		t.Errorf("筹码不守恒: total=%d", total)
+	if total != initialTotal {
+		t.Errorf("筹码不守恒: total=%d, expected=%d", total, initialTotal)
 	}
 	for _, s := range r.Seats {
 		if s.Chips < 0 {

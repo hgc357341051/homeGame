@@ -29,10 +29,26 @@ function makeClient(name) {
       check()
     })
   }
+  // 等待指定类型且满足 predicate 的消息，跳过历史残留的同类型消息
+  function waitMsgWhere(type, predicate, timeout = 5000) {
+    const start = Date.now()
+    return new Promise((resolve, reject) => {
+      function check() {
+        const idx = inbox.findIndex((m) => m.type === type && predicate(m))
+        if (idx >= 0) {
+          const [found] = inbox.splice(idx, 1)
+          return resolve(found)
+        }
+        if (Date.now() - start > timeout) return reject(new Error('timeout waiting for ' + type))
+        setTimeout(check, 50)
+      }
+      check()
+    })
+  }
   function close() {
     ws.close()
   }
-  return { ws, wsReady, send, waitMsg, inbox, close }
+  return { ws, wsReady, send, waitMsg, waitMsgWhere, inbox, close }
 }
 
 async function main() {
@@ -199,9 +215,9 @@ async function main() {
   const turnClient = turnSeat === 0 ? z1 : z2
   const otherClient = turnSeat === 0 ? z2 : z1
   console.log('✓ 当前轮到座位', turnSeat)
-  // 看牌（不应消耗轮次）
+  // 看牌（不应消耗轮次）。用 waitMsgWhere 跳过 turnClient 残留的开局 phase 事件
   turnClient.send('look')
-  const lookEv = await turnClient.waitMsg('phase')
+  const lookEv = await turnClient.waitMsgWhere('phase', (m) => m.data.event === 'look')
   if (lookEv.data.event !== 'look') throw new Error('应收到 look 事件')
   console.log('✓ 看牌成功，未消耗轮次')
   // 看牌后应能立即 compare（不再报"还没轮到你"）

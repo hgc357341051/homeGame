@@ -32,7 +32,7 @@ const rankDisplay = computed(() => {
   if (!props.card) return ''
   if (props.card.rank === '小王') return '小王'
   if (props.card.rank === '大王') return '大王'
-  return props.card.rank === '10' ? '10' : props.card.rank
+  return props.card.rank
 })
 </script>
 

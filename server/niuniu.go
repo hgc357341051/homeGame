@@ -541,7 +541,9 @@ func (e *nnEngine) handleSetNiu(r *Room, seat int, action string, data ActionDat
 	// 计算：若玩家选了 3 张，校验其和是否为 10 倍数；否则自动最佳
 	allCards := s.Hand
 	res := evalNN(allCards)
-	if valid {
+	// 特殊牌型（五小牛/炸弹牛/五花牛）由系统自动判定，玩家选择不覆盖
+	// 避免玩家误选3张把7倍五小牛变成1倍没牛
+	if valid && res.Level < 3 {
 		// 用玩家选择的 3 张作为牛牌，重新算 value
 		rest := []Card{}
 		_, _ = removeCards(s.Hand, chosen) // 已校验
@@ -631,7 +633,7 @@ func (e *nnEngine) settle(r *Room) []Event {
 			"niuCards": res.NiuCards, "niuName": nnName(res), "multiplier": res.Multiplier,
 		}, Target: -1})
 	}
-	// deltaMap: 庄闲结算 + 底池分配（押注阶段已扣注码，故底池直接补给赢家）
+	// deltaMap: 仅庄闲结算（输方→赢方的筹码转移）
 	deltaMap := map[int]int{}
 	if dealerInResults {
 		for _, seatIdx := range e.occupied {
@@ -649,7 +651,7 @@ func (e *nnEngine) settle(r *Room) []Event {
 			}
 		}
 	}
-	// 底池分配给最佳手牌（同分平分）
+	// 底池分配给最佳手牌（同分平分）—— potShare 是已押入底池的真实筹码，全额分配，不受 scale 折扣影响
 	potWinners := []int{}
 	for _, seatIdx := range e.occupied {
 		s := r.Seats[seatIdx]
@@ -660,14 +662,18 @@ func (e *nnEngine) settle(r *Room) []Event {
 			potWinners = append(potWinners, seatIdx)
 		}
 	}
-	share := 0
+	potShare := map[int]int{}
 	if len(potWinners) > 0 {
-		share = e.pot / len(potWinners)
+		share := e.pot / len(potWinners)
+		remainder := e.pot % len(potWinners)
+		for i, w := range potWinners {
+			potShare[w] = share
+			if i < remainder {
+				potShare[w]++ // 余数依次分配给前几位，确保筹码守恒
+			}
+		}
 	}
-	for _, w := range potWinners {
-		deltaMap[w] += share
-	}
-	// 守恒结算：输方实际赔付不超过其筹码余额；若不足，按比例缩减赢方收益
+	// 守恒结算：输方实际赔付不超过其筹码余额；若不足，按比例缩减赢方收益（仅作用于庄闲结算，不含底池）
 	losersCap := 0
 	winnersGain := 0
 	for _, seatIdx := range e.occupied {
@@ -689,7 +695,8 @@ func (e *nnEngine) settle(r *Room) []Event {
 	results := []ActionData{}
 	for _, seatIdx := range e.occupied {
 		s := r.Seats[seatIdx]
-		gain := deltaMap[seatIdx] // 庄闲结算 + 底池收益
+		// 庄闲结算部分（受 scale 折扣）
+		gain := deltaMap[seatIdx]
 		if gain < 0 {
 			// 输方赔付不超过自身筹码
 			loss := -gain
@@ -700,6 +707,8 @@ func (e *nnEngine) settle(r *Room) []Event {
 		} else if gain > 0 && scale < 1.0 {
 			gain = int(float64(gain) * scale)
 		}
+		// 底池收益全额发放（不受 scale 影响）
+		gain += potShare[seatIdx]
 		s.Chips += gain
 		// SettledDelta 为本局总盈亏 = 收益 - 自己已下的注（注码已在押注阶段扣除）
 		s.SettledDelta = gain - s.CurrentBet
