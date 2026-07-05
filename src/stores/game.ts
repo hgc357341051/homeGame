@@ -229,7 +229,12 @@ export const useGameStore = defineStore('game', () => {
           const looked = d.lookedIndices as boolean[]
           myHand.value = cards.map((c, i) => looked[i] ? c : { suit: '', rank: '?', value: 0 })
         } else {
-          myHand.value = d.cards || []
+          // 普通模式：仅当手牌内容变化时才替换，避免 broadcastState 重复下发相同手牌
+          // 导致 MyHand 的 watch 误清空选中（NN 凑牛阶段尤为关键）
+          const incoming = (d.cards as Card[]) || []
+          if (!cardsEqual(myHand.value, incoming)) {
+            myHand.value = incoming
+          }
         }
         break
       case 'turn':
@@ -272,6 +277,15 @@ export const useGameStore = defineStore('game', () => {
     return s ? s.name : `座位${seat}`
   }
 
+  // 比较两组手牌内容是否相同（顺序敏感），用于避免重复 deal 清空选中
+  function cardsEqual(a: Card[], b: Card[]): boolean {
+    if (a.length !== b.length) return false
+    for (let i = 0; i < a.length; i++) {
+      if (a[i].suit !== b[i].suit || a[i].rank !== b[i].rank || a[i].value !== b[i].value) return false
+    }
+    return true
+  }
+
   function clearReveal() {
     reveal.value = null
   }
@@ -299,8 +313,8 @@ export const useGameStore = defineStore('game', () => {
   }
 
   function leaveRoom() {
-    // 仅发 leave 通知服务端，由路由守卫统一 cleanupRoom（避免重复清理）
-    send('leave', {})
+    // 仅跳转路由，由路由守卫统一负责 send('leave') + cleanupRoom
+    // 避免在此处与路由守卫重复发送 leave
     router.push('/')
   }
 

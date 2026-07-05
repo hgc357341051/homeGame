@@ -466,13 +466,15 @@ func (e *zjhEngine) HandleAction(r *Room, seat int, action string, data ActionDa
 func (e *zjhEngine) settleByFold(r *Room) []Event {
 	e.phase = "settled"
 	actives := e.activeSeats(r)
-	// 防御：活跃玩家为空时（全员弃牌/腾空），直接平局结算避免 panic
+	// 防御：活跃玩家为空时（全员弃牌/腾空），退还各自已下注码，避免底池凭空消失
 	if len(actives) == 0 {
 		results := []ActionData{}
 		for _, seatIdx := range e.occupied {
 			s := r.Seats[seatIdx]
-			s.SettledDelta = -s.CurrentBet
-			results = append(results, ActionData{"seat": seatIdx, "name": s.Name, "delta": s.SettledDelta, "chips": s.Chips, "win": false})
+			// 退还已下注码：chips 加回 CurrentBet，delta 记为 0（不输不赢）
+			s.Chips += s.CurrentBet
+			s.SettledDelta = 0
+			results = append(results, ActionData{"seat": seatIdx, "name": s.Name, "delta": 0, "chips": s.Chips, "win": false})
 		}
 		e.pot = 0
 		r.Phase = "settled"
@@ -481,7 +483,7 @@ func (e *zjhEngine) settleByFold(r *Room) []Event {
 			s.CurrentBet = 0
 		}
 		return []Event{
-			{Type: "settle", Data: ActionData{"results": results, "game": "zjh", "winnerSeat": -1}, Target: -1},
+			{Type: "settle", Data: ActionData{"results": results, "game": "zjh", "winnerSeat": -1, "aborted": true}, Target: -1},
 			{Type: "phase", Data: ActionData{"phase": "settled", "message": "全员离场，本局中止"}, Target: -1},
 		}
 	}

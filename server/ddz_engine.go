@@ -39,6 +39,7 @@ func (e *ddzEngine) OnSeatVacated(r *Room, seat int) []Event {
 	for _, s := range r.Seats {
 		s.Ready = false
 		s.Hand = nil
+		s.IsLandlord = false
 	}
 	// 生成结算事件（delta=0 平局），让前端能正常显示结算面板并重启
 	results := []ActionData{}

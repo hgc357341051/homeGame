@@ -677,7 +677,7 @@ func (r *Room) handleStart(c *Client, data ActionData) {
 	}
 	// 房主可在开局数据中指定蒙牌模式（仅炸金花生效）；
 	// 未传 blindMode 字段时保留 r.BlindMode 现有值（避免覆盖 setBlindMode 已设置的开关）
-	if v, ok := data["blindMode"].(bool); ok {
+	if v, ok := data["blindMode"].(bool); ok && r.Game == "zjh" {
 		r.BlindMode = v
 	}
 	// 重置座位对局状态

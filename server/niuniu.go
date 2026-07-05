@@ -405,6 +405,32 @@ func (e *nnEngine) settleByFold(r *Room) []Event {
 		}
 	}
 	evs := []Event{}
+	// 无赢家（全员离场/弃牌）：退还各自已下注码，避免底池凭空消失
+	if winner < 0 {
+		results := []ActionData{}
+		for _, seatIdx := range e.occupied {
+			s := r.Seats[seatIdx]
+			s.Chips += s.CurrentBet
+			s.SettledDelta = 0
+			results = append(results, ActionData{
+				"seat": seatIdx, "name": s.Name, "delta": 0, "chips": s.Chips,
+				"isFolded": s.IsFolded, "win": false,
+			})
+		}
+		e.pot = 0
+		r.Phase = "settled"
+		for _, s := range r.Seats {
+			s.Ready = false
+			s.CurrentBet = 0
+		}
+		evs = append(evs, Event{Type: "settle", Data: ActionData{
+			"results": results, "game": "nn", "winnerSeat": -1, "aborted": true,
+		}, Target: -1})
+		evs = append(evs, Event{Type: "phase", Data: ActionData{
+			"phase": "settled", "message": "全员离场，本局中止",
+		}, Target: -1})
+		return evs
+	}
 	results := []ActionData{}
 	for _, seatIdx := range e.occupied {
 		s := r.Seats[seatIdx]
