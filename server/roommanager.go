@@ -165,12 +165,22 @@ func (rm *RoomManager) handleAction(c *Client, action string, data ActionData) {
 		// 支持重连：客户端携带本地存储的 playerId 时，恢复使用以便夺回原座位
 		if pid, ok := data["playerId"].(string); ok && pid != "" {
 			c.hub.mu.Lock()
-			if existing, exists := c.hub.clients[pid]; !exists || existing == c {
+			if existing, exists := c.hub.clients[pid]; exists && existing != c {
+				// 僵尸连接：旧连接仍占据该 playerId，踢掉旧连接让新连接接管
+				old := existing
 				delete(c.hub.clients, c.playerID)
 				c.playerID = pid
 				c.hub.clients[pid] = c
+				c.hub.mu.Unlock()
+				// 锁外关闭旧连接，触发其 readPump 退出 → unregister
+				// Hub.run 处理 unregister 时 existing != old 不会误删新连接
+				old.conn.Close()
+			} else {
+				delete(c.hub.clients, c.playerID)
+				c.playerID = pid
+				c.hub.clients[pid] = c
+				c.hub.mu.Unlock()
 			}
-			c.hub.mu.Unlock()
 		}
 		if c.name == "" {
 			c.name = "玩家" + c.playerID[:4]

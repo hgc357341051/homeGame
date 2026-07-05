@@ -141,6 +141,11 @@ export const useGameStore = defineStore('game', () => {
       ws.onerror = () => {
         connecting.value = false
         if (!isReconnect) showError('网络连接异常')
+        // onerror 后通常会跟 onclose，但若仅 onerror 不 reject，promise 会挂起至超时
+        if (!settled) {
+          settled = true
+          reject(new Error('WebSocket 连接错误'))
+        }
       }
       ws.onclose = () => {
         connected.value = false
@@ -183,6 +188,8 @@ export const useGameStore = defineStore('game', () => {
   }
 
   function joinRoom(code: string) {
+    // 已加入同一房间则不重复发送（避免 HomePage 与 RoomPage 重复 joinRoom）
+    if (joinedCode === code && socket && socket.readyState === WebSocket.OPEN) return
     // 记录已加入的房间号，断线重连时自动重新加入
     joinedCode = code
     // 进入新房间：清除主动关闭标记，确保断线后可正常重连

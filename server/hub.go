@@ -57,6 +57,13 @@ func (h *Hub) run() {
 		select {
 		case c := <-h.register:
 			h.mu.Lock()
+			// 处理极小概率的 ID 碰撞：原子检查并重新生成，关闭 genUniqueID 的 TOCTOU 窗口
+			for {
+				if _, exists := h.clients[c.playerID]; !exists {
+					break
+				}
+				c.playerID = genID()
+			}
 			h.clients[c.playerID] = c
 			h.mu.Unlock()
 		case c := <-h.unregister:
