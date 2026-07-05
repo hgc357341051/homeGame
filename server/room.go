@@ -672,11 +672,10 @@ func (r *Room) handleStart(c *Client, data ActionData) {
 		c.emitError("入座且准备的人数不足")
 		return
 	}
-	// 房主可在开局数据中指定蒙牌模式（仅炸金花生效）
+	// 房主可在开局数据中指定蒙牌模式（仅炸金花生效）；
+	// 未传 blindMode 字段时保留 r.BlindMode 现有值（避免覆盖 setBlindMode 已设置的开关）
 	if v, ok := data["blindMode"].(bool); ok {
 		r.BlindMode = v
-	} else {
-		r.BlindMode = false
 	}
 	// 重置座位对局状态
 	for _, s := range r.Seats {
