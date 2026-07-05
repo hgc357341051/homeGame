@@ -631,7 +631,8 @@ func (e *nnEngine) settle(r *Room) []Event {
 			"niuCards": res.NiuCards, "niuName": nnName(res), "multiplier": res.Multiplier,
 		}, Target: -1})
 	}
-	// deltaMap: 庄闲结算 + 底池分配（押注阶段已扣注码，故底池直接补给赢家）
+	// deltaMap: 庄闲结算（输赢双方对称，零和）
+	// potShare: 底池分配（押注阶段已扣注码，底池全额分给赢家）
 	deltaMap := map[int]int{}
 	if dealerInResults {
 		for _, seatIdx := range e.occupied {
@@ -664,10 +665,8 @@ func (e *nnEngine) settle(r *Room) []Event {
 	if len(potWinners) > 0 {
 		share = e.pot / len(potWinners)
 	}
-	for _, w := range potWinners {
-		deltaMap[w] += share
-	}
-	// 守恒结算：输方实际赔付不超过其筹码余额；若不足，按比例缩减赢方收益
+	// 守恒结算：仅对庄闲结算部分（deltaMap）应用筹码不足折扣
+	// 底池 share 全额发放（押注阶段已扣，不存在赔付不起）
 	losersCap := 0
 	winnersGain := 0
 	for _, seatIdx := range e.occupied {
@@ -689,16 +688,28 @@ func (e *nnEngine) settle(r *Room) []Event {
 	results := []ActionData{}
 	for _, seatIdx := range e.occupied {
 		s := r.Seats[seatIdx]
-		gain := deltaMap[seatIdx] // 庄闲结算 + 底池收益
-		if gain < 0 {
+		settleGain := deltaMap[seatIdx] // 庄闲结算部分
+		if settleGain < 0 {
 			// 输方赔付不超过自身筹码
-			loss := -gain
+			loss := -settleGain
 			if s.Chips < loss {
 				loss = s.Chips
 			}
-			gain = -loss
-		} else if gain > 0 && scale < 1.0 {
-			gain = int(float64(gain) * scale)
+			settleGain = -loss
+		} else if settleGain > 0 && scale < 1.0 {
+			settleGain = int(float64(settleGain) * scale)
+		}
+		// 总收益 = 庄闲结算（已折扣）+ 底池 share（全额）
+		isPotWinner := false
+		for _, w := range potWinners {
+			if w == seatIdx {
+				isPotWinner = true
+				break
+			}
+		}
+		gain := settleGain
+		if isPotWinner {
+			gain += share
 		}
 		s.Chips += gain
 		// SettledDelta 为本局总盈亏 = 收益 - 自己已下的注（注码已在押注阶段扣除）

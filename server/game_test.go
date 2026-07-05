@@ -171,10 +171,15 @@ func TestDDZSettleConservation(t *testing.T) {
 }
 
 // 验证 M3 修复：牛牛结算筹码守恒
+// 场景：闲家筹码5（赢家），庄家筹码1000（输方）。闲家牛牛×4赢庄家。
+// 押注阶段已扣注码：闲家CurrentBet=10, 庄家CurrentBet=10, pot=20。
+// 庄闲结算：闲家赢 4*10=40，庄家输 40（庄家筹码足，全额赔付）。
+// 底池分配：闲家为最佳手牌，独得 pot=20（底池全额，不受 scale 影响）。
+// 最终：闲家 5+40+20=65，庄家 1000-40=960，总 1025（=初始5+1000+pot20）。
 func TestNNSettleConservation(t *testing.T) {
 	r := &Room{Seats: []*Seat{
-		{Index: 0, PlayerID: "P0", Name: "P0", Chips: 5}, // 闲家筹码不足
-		{Index: 1, PlayerID: "P1", Name: "P1", Chips: 1000},
+		{Index: 0, PlayerID: "P0", Name: "P0", Chips: 5, CurrentBet: 10}, // 闲家筹码不足但是赢家
+		{Index: 1, PlayerID: "P1", Name: "P1", Chips: 1000, CurrentBet: 10},
 	}}
 	e := &nnEngine{
 		occupied:    []int{0, 1},
@@ -187,14 +192,23 @@ func TestNNSettleConservation(t *testing.T) {
 	e.results[0] = nnResult{Level: 2, Value: 10, Multiplier: 4} // 闲家牛牛
 	e.results[1] = nnResult{Level: 2, Value: 0, Multiplier: 1}  // 庄家没牛
 	_ = e.settle(r)
+	// 守恒：玩家筹码之和 + pot(已清零) = 初始筹码之和 + pot
+	// 初始玩家筹码 5+1000=1005，pot=20，故最终玩家筹码之和应为 1025
 	total := r.Seats[0].Chips + r.Seats[1].Chips
-	if total != 5+1000 {
-		t.Errorf("筹码不守恒: total=%d", total)
+	if total != 5+1000+20 {
+		t.Errorf("筹码不守恒: total=%d, 期望 %d", total, 5+1000+20)
 	}
 	for _, s := range r.Seats {
 		if s.Chips < 0 {
 			t.Errorf("座位 %d 筹码为负: %d", s.Index, s.Chips)
 		}
+	}
+	// 闲家应是底池赢家，获得 pot=20
+	if r.Seats[0].Chips != 65 {
+		t.Errorf("闲家筹码应为 65 (5+40+20), 实际 %d", r.Seats[0].Chips)
+	}
+	if r.Seats[1].Chips != 960 {
+		t.Errorf("庄家筹码应为 960 (1000-40), 实际 %d", r.Seats[1].Chips)
 	}
 }
 
