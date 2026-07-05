@@ -28,6 +28,7 @@ type Seat struct {
 	CurrentBet    int
 	HasNiu        bool
 	NiuValue      int
+	NiuName       string // 牛型名称（五小牛/炸弹牛/五花牛/牛牛/牛N/没牛），前端直接展示
 	NiuCards      []Card // 凑牛的 3 张
 	SettledDelta  int
 	LookedIndices []bool // 蒙牌模式下已查看的牌索引
@@ -192,6 +193,7 @@ func (r *Room) viewFor(c *Client) RoomStateView {
 			CurrentBet:   s.CurrentBet,
 			HasNiu:       s.HasNiu,
 			NiuValue:     s.NiuValue,
+			NiuName:      s.NiuName,
 			SettledDelta: s.SettledDelta,
 			IsRevealed:   s.IsRevealed,
 		}
@@ -481,6 +483,7 @@ func (r *Room) standLocked(seat int) {
 	s.CurrentBet = 0
 	s.HasNiu = false
 	s.NiuValue = 0
+	s.NiuName = ""
 	s.NiuCards = nil
 	s.SettledDelta = 0
 	s.LookedIndices = nil
@@ -690,6 +693,7 @@ func (r *Room) handleStart(c *Client, data ActionData) {
 		s.CurrentBet = 0
 		s.HasNiu = false
 		s.NiuValue = 0
+		s.NiuName = ""
 		s.NiuCards = nil
 		s.SettledDelta = 0
 		s.LookedIndices = nil

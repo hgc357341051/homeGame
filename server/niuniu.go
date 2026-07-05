@@ -297,6 +297,7 @@ func (e *nnEngine) Start(r *Room) []Event {
 		r.Seats[seatIdx].IsDealer = false
 		r.Seats[seatIdx].HasNiu = false
 		r.Seats[seatIdx].NiuValue = 0
+		r.Seats[seatIdx].NiuName = ""
 		r.Seats[seatIdx].NiuCards = nil
 		r.Seats[seatIdx].IsFolded = false
 	}
@@ -581,6 +582,7 @@ func (e *nnEngine) handleSetNiu(r *Room, seat int, action string, data ActionDat
 	e.results[seat] = res
 	s.HasNiu = res.Value > 0 || res.Level > 2
 	s.NiuValue = res.Value
+	s.NiuName = nnName(res)
 	if res.NiuCards != nil {
 		s.NiuCards = res.NiuCards
 	}

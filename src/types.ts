@@ -27,6 +27,7 @@ export interface SeatView {
   currentBet?: number
   hasNiu?: boolean
   niuValue?: number
+  niuName?: string
   settledDelta?: number
   lookedIndices?: boolean[]
   isRevealed?: boolean

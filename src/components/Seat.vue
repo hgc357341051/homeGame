@@ -99,7 +99,7 @@ function renameSeat() {
         <span class="bet" v-if="seat.currentBet">注 {{ seat.currentBet }}</span>
         <span class="ready" v-if="seat.ready">✓ 已准备</span>
       </div>
-      <div class="niu" v-if="seat.hasNiu">牛 {{ seat.niuValue === 0 ? '没' : (seat.niuValue === 10 ? '牛' : seat.niuValue) }}</div>
+      <div class="niu" v-if="seat.hasNiu">{{ seat.niuName || '有牛' }}</div>
     </div>
     <div class="info empty-info" v-else>
       <span class="empty-text">空位</span>
