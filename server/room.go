@@ -268,11 +268,13 @@ func (r *Room) handleDisconnect(c *Client) {
 			break
 		}
 	}
+	// 快照 phase，避免 Unlock 后并发读取 r.Phase 产生 data race
+	phase := r.Phase
 	r.broadcastStateAsync()
 	r.mu.Unlock()
 	// 仅当该连接确实在房间内时才提示（避免僵尸连接替换后误报）
 	if found && leaveName != "" {
-		if r.Phase == "playing" {
+		if phase == "playing" {
 			r.systemChat(leaveName + " 掉线了（座位保留 3 分钟）")
 		} else {
 			r.systemChat(leaveName + " 离开了房间")
@@ -282,17 +284,27 @@ func (r *Room) handleDisconnect(c *Client) {
 
 // cleanupOfflineSeatsLocked 释放已超时的掉线座位（懒清理，调用方需持有 r.mu）
 func (r *Room) cleanupOfflineSeatsLocked() {
+	hostVacated := false
 	for _, s := range r.Seats {
 		if s.isOffline() && time.Since(s.DisconnectedAt) > offlineTimeout {
 			name := s.Name
 			seatIdx := s.Index
+			wasHost := s.PlayerID == r.HostID
 			r.standLocked(seatIdx)
 			r.systemChat(name + " 掉线超时，座位已释放")
 			// 对局中腾空座位：通知引擎推进回合或结算
 			if r.Phase == "playing" {
 				r.emitEvents(r.Engine.OnSeatVacated(r, seatIdx))
 			}
+			if wasHost {
+				hostVacated = true
+			}
 		}
+	}
+	// 仅当房主座位因超时被腾空且对局已结束时，才转移房主权
+	// （不影响房主作为旁观者未入座的正常场景）
+	if hostVacated && r.Phase != "playing" {
+		r.transferHostLocked()
 	}
 }
 
@@ -471,6 +483,7 @@ func (r *Room) applyAction(c *Client, action string, data ActionData) {
 
 func (r *Room) standLocked(seat int) {
 	s := r.Seats[seat]
+	wasHost := s.PlayerID == r.HostID
 	s.Client = nil
 	s.PlayerID = ""
 	s.Name = ""
@@ -490,6 +503,21 @@ func (r *Room) standLocked(seat int) {
 	s.IsRevealed = false
 	s.DisconnectedAt = time.Time{}
 	s.Chips = startChips // 重置筹码，避免新入座者继承前任筹码
+	// 房主离开：在 waiting/settled 阶段将房主转移给最早入座的在线玩家，避免房间无法继续操作
+	if wasHost && (r.Phase == "waiting" || r.Phase == "settled") {
+		r.transferHostLocked()
+	}
+}
+
+// transferHostLocked 将房主权转移给最早入座的在线玩家（调用方需持有 r.mu）
+func (r *Room) transferHostLocked() {
+	for _, s := range r.Seats {
+		if s.occupied() && s.PlayerID != "" {
+			r.HostID = s.PlayerID
+			return
+		}
+	}
+	// 无人可转移时保留原 HostID（房间将等 reaper 回收）
 }
 
 func (r *Room) handleSit(c *Client, data ActionData) {

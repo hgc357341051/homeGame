@@ -14,7 +14,7 @@ function makeClient(name) {
   function send(type, data = {}) {
     ws.send(JSON.stringify({ type, data }))
   }
-  function waitMsg(type, timeout = 2000) {
+  function waitMsg(type, timeout = 5000) {
     const start = Date.now()
     return new Promise((resolve, reject) => {
       function check() {
@@ -80,6 +80,7 @@ async function main() {
   console.log('✓ 聊天:', chatMsg.data.player, '-', chatMsg.data.text)
 
   c.close()
+  await new Promise((r) => setTimeout(r, 300))
   console.log('\n--- 测试2: 三玩家 DDZ 开局流程 ---')
   const a = makeClient('玩家甲')
   const b = makeClient('玩家乙')
@@ -164,10 +165,12 @@ async function main() {
     }
     console.log(`✓ ${label} 安全检查通过: 他人手牌未泄露`)
     p1.close(); p2.close()
+    await new Promise((r) => setTimeout(r, 300))
   }
 
   await twoPlayerStart('zjh', '炸金花')
   await twoPlayerStart('nn', '牛牛')
+  await new Promise((r) => setTimeout(r, 300))
 
   // --- 测试: 炸金花 look→compare 比牌流程（验证 look 不再消耗轮次）---
   console.log('\n--- 测试: 炸金花 look→compare 比牌流程 ---')

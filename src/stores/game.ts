@@ -134,7 +134,8 @@ export const useGameStore = defineStore('game', () => {
           const msg: ServerMessage = JSON.parse(ev.data)
           handle(msg)
         } catch (e) {
-          /* ignore */
+          // 解析失败不应静默，便于排查服务端异常消息
+          console.error('[WS] 消息解析失败:', ev.data, e)
         }
       }
       ws.onerror = () => {
@@ -302,6 +303,12 @@ export const useGameStore = defineStore('game', () => {
     stopHeartbeat()
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
     reconnecting.value = false
+    failed.value = false
+    connecting.value = false
+    reconnectAttempts = 0
+    // 清理错误提示，避免旧房间错误残留到新房间/首页
+    errorToast.value = ''
+    if (errorTimer) { clearTimeout(errorTimer); errorTimer = null }
     room.value = null
     myHand.value = []
     chat.value = []

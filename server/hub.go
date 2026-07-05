@@ -79,6 +79,9 @@ func (c *Client) sendMsg(m Message) {
 	if err != nil {
 		return
 	}
+	// recover 防止向已关闭的 send channel 发送导致整个进程 panic
+	// （broadcast 在不持锁时遍历 Seats/Spectators，可能命中刚被 Hub.run close 的连接）
+	defer func() { _ = recover() }()
 	select {
 	case c.send <- b:
 	default:

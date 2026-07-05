@@ -121,9 +121,15 @@ watch(
   },
 )
 
+// 取消标志：快速切换路由时阻止旧 joinRoom 的 await 续行
+let joinCancelled = false
+
 async function joinRoom() {
+  joinCancelled = false
   try {
     await store.connect()
+    // await 期间若已离开页面（路由切换），不再发送 joinRoom，避免残留旧房间号
+    if (joinCancelled) return
     store.joinRoom(props.code.toUpperCase())
   } catch {
     /* 错误已由 store 提示 */
@@ -169,7 +175,18 @@ onMounted(() => {
   joinRoom()
 })
 
+// 同一组件实例下房间号变化（room/A → room/B 直跳）时重新加入
+watch(
+  () => props.code,
+  (newCode, oldCode) => {
+    if (newCode && newCode.toUpperCase() !== oldCode?.toUpperCase()) {
+      joinRoom()
+    }
+  },
+)
+
 onUnmounted(() => {
+  joinCancelled = true
   if (revealTimer) clearTimeout(revealTimer)
   window.removeEventListener('resize', checkMobile)
 })
