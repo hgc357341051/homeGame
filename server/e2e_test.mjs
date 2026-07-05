@@ -192,17 +192,30 @@ async function main() {
   const zDeal1 = await z1.waitMsg('deal')
   if (zDeal1.data.cards?.length !== 3) throw new Error('ZJH 应发3张')
   console.log('✓ 比牌甲收到手牌:', zDeal1.data.cards.length, '张')
-  await z1.waitMsg('phase')
-  // 找到当前轮到的玩家
+  // 先找到当前轮到的玩家（从 z1 的 turn 事件读取）
   const zTurn1 = await z1.waitMsg('turn')
   const turnSeat = zTurn1.data.seat
   const turnClient = turnSeat === 0 ? z1 : z2
-  const otherClient = turnSeat === 0 ? z2 : z1
   console.log('✓ 当前轮到座位', turnSeat)
+  // 清空双方 inbox 中累积的 phase/turn，避免干扰后续 look 事件匹配
+  z1.inbox.length = 0
+  z2.inbox.length = 0
   // 看牌（不应消耗轮次）
   turnClient.send('look')
-  const lookEv = await turnClient.waitMsg('phase')
-  if (lookEv.data.event !== 'look') throw new Error('应收到 look 事件')
+  // 精确等待 event=look 的 phase 事件（跳过其他 phase 广播）
+  const lookEv = await new Promise((resolve, reject) => {
+    const start = Date.now()
+    function check() {
+      const idx = turnClient.inbox.findIndex((m) => m.type === 'phase' && m.data.event === 'look')
+      if (idx >= 0) {
+        const [found] = turnClient.inbox.splice(idx, 1)
+        return resolve(found)
+      }
+      if (Date.now() - start > 2000) return reject(new Error('timeout waiting for look event'))
+      setTimeout(check, 50)
+    }
+    check()
+  })
   console.log('✓ 看牌成功，未消耗轮次')
   // 看牌后应能立即 compare（不再报"还没轮到你"）
   turnClient.send('compare', { target: turnSeat === 0 ? 1 : 0 })
