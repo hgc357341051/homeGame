@@ -435,9 +435,6 @@ func (e *nnEngine) settleByFold(r *Room) []Event {
 	for _, s := range r.Seats {
 		s.Ready = false
 		s.CurrentBet = 0
-		if s.Chips < 0 {
-			s.Chips = 0 // 筹码下界封 0
-		}
 	}
 	return evs
 }
@@ -670,10 +667,39 @@ func (e *nnEngine) settle(r *Room) []Event {
 	for _, w := range potWinners {
 		deltaMap[w] += share
 	}
+	// 守恒结算：输方实际赔付不超过其筹码余额；若不足，按比例缩减赢方收益
+	losersCap := 0
+	winnersGain := 0
+	for _, seatIdx := range e.occupied {
+		d := deltaMap[seatIdx]
+		if d < 0 {
+			loss := -d
+			if r.Seats[seatIdx].Chips < loss {
+				loss = r.Seats[seatIdx].Chips
+			}
+			losersCap += loss
+		} else if d > 0 {
+			winnersGain += d
+		}
+	}
+	scale := 1.0
+	if winnersGain > 0 && losersCap < winnersGain {
+		scale = float64(losersCap) / float64(winnersGain)
+	}
 	results := []ActionData{}
 	for _, seatIdx := range e.occupied {
 		s := r.Seats[seatIdx]
 		gain := deltaMap[seatIdx] // 庄闲结算 + 底池收益
+		if gain < 0 {
+			// 输方赔付不超过自身筹码
+			loss := -gain
+			if s.Chips < loss {
+				loss = s.Chips
+			}
+			gain = -loss
+		} else if gain > 0 && scale < 1.0 {
+			gain = int(float64(gain) * scale)
+		}
 		s.Chips += gain
 		// SettledDelta 为本局总盈亏 = 收益 - 自己已下的注（注码已在押注阶段扣除）
 		s.SettledDelta = gain - s.CurrentBet
@@ -696,9 +722,6 @@ func (e *nnEngine) settle(r *Room) []Event {
 	for _, s := range r.Seats {
 		s.Ready = false
 		s.CurrentBet = 0
-		if s.Chips < 0 {
-			s.Chips = 0 // 筹码下界封 0，避免负数
-		}
 	}
 	return evs
 }

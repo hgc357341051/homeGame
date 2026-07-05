@@ -58,8 +58,8 @@ func sortByValue(cards []Card) {
 	}
 }
 
-// 斗地主手牌排序：升序
-func sortByValueDescDDZ(cards []Card) {
+// 斗地主手牌排序：升序（与 sortByValue 实现相同，保留独立函数便于后续按花色扩展）
+func sortByValueDDZ(cards []Card) {
 	for i := 1; i < len(cards); i++ {
 		for j := i; j > 0 && cards[j].Value < cards[j-1].Value; j-- {
 			cards[j], cards[j-1] = cards[j-1], cards[j]

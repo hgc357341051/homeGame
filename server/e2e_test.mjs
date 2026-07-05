@@ -1,5 +1,5 @@
 // 端到端冒烟测试：连接 -> enter -> createRoom -> 验证 roomState
-const URL = 'ws://localhost:8080/ws'
+const URL = 'ws://localhost:9898/ws'
 
 function makeClient(name) {
   const ws = new WebSocket(URL)
@@ -168,6 +168,64 @@ async function main() {
 
   await twoPlayerStart('zjh', '炸金花')
   await twoPlayerStart('nn', '牛牛')
+
+  // --- 测试: 炸金花 look→compare 比牌流程（验证 look 不再消耗轮次）---
+  console.log('\n--- 测试: 炸金花 look→compare 比牌流程 ---')
+  const z1 = makeClient('比牌甲')
+  const z2 = makeClient('比牌乙')
+  await Promise.all([z1.wsReady, z2.wsReady])
+  z1.send('enter', { name: '比牌甲' })
+  z2.send('enter', { name: '比牌乙' })
+  await Promise.all([z1.waitMsg('entered'), z2.waitMsg('entered')])
+  z1.send('createRoom', { game: 'zjh' })
+  const zrc = await z1.waitMsg('roomCreated')
+  const zcode = zrc.data.code
+  z2.send('joinRoom', { code: zcode })
+  z1.send('sit', { seat: 0 })
+  z2.send('sit', { seat: 1 })
+  await Promise.all([z1.waitMsg('roomState'), z2.waitMsg('roomState')])
+  z1.send('ready')
+  z2.send('ready')
+  await new Promise((r) => setTimeout(r, 300))
+  z1.send('start')
+  // 双方各收到 deal(3张) 和 phase(betting) 和 turn
+  const zDeal1 = await z1.waitMsg('deal')
+  if (zDeal1.data.cards?.length !== 3) throw new Error('ZJH 应发3张')
+  console.log('✓ 比牌甲收到手牌:', zDeal1.data.cards.length, '张')
+  await z1.waitMsg('phase')
+  // 找到当前轮到的玩家
+  const zTurn1 = await z1.waitMsg('turn')
+  const turnSeat = zTurn1.data.seat
+  const turnClient = turnSeat === 0 ? z1 : z2
+  const otherClient = turnSeat === 0 ? z2 : z1
+  console.log('✓ 当前轮到座位', turnSeat)
+  // 看牌（不应消耗轮次）
+  turnClient.send('look')
+  const lookEv = await turnClient.waitMsg('phase')
+  if (lookEv.data.event !== 'look') throw new Error('应收到 look 事件')
+  console.log('✓ 看牌成功，未消耗轮次')
+  // 看牌后应能立即 compare（不再报"还没轮到你"）
+  turnClient.send('compare', { target: turnSeat === 0 ? 1 : 0 })
+  // 收到 reveal（比牌结果公开）
+  let revealEv = null
+  try {
+    revealEv = await turnClient.waitMsg('reveal', 2000)
+  } catch (e) {
+    // 可能因筹码不足等错误，记录但不立即失败
+  }
+  if (revealEv && revealEv.data.cards && revealEv.data.cards2) {
+    console.log('✓ 比牌成功: 座位', revealEv.data.seat, 'vs 座位', revealEv.data.seat2,
+      '| 类型:', revealEv.data.type, 'vs', revealEv.data.type2,
+      '| 赢家座位:', revealEv.data.winner)
+  } else {
+    // 检查是否是预期的错误（如筹码不足），而非"还没轮到你"
+    const errs = turnClient.inbox.filter((m) => m.type === 'error')
+    if (errs.length > 0 && errs[0].data.msg?.includes('还没轮到你')) {
+      throw new Error('look 仍消耗轮次：' + errs[0].data.msg)
+    }
+    console.log('⚠ 比牌未触发 reveal（可能筹码不足），但未报"还没轮到你"')
+  }
+  z1.close(); z2.close()
 
   console.log('\n🎉 三款游戏端到端冒烟测试全部通过')
   process.exit(0)

@@ -109,3 +109,136 @@ func TestRemoveCards(t *testing.T) {
 		t.Fatalf("len=%d", len(out))
 	}
 }
+
+// 验证 H1 修复：飞机带翼允许"翼为同点对子拆分"
+func TestDDZPlaneSinglePairWing(t *testing.T) {
+	// 555+666+77（两张7作为两单翼）应识别为 planeSingle
+	cards := []Card{
+		tc("♠", "5", 5), tc("♥", "5", 5), tc("♦", "5", 5),
+		tc("♠", "6", 6), tc("♥", "6", 6), tc("♦", "6", 6),
+		tc("♠", "7", 7), tc("♣", "7", 7),
+	}
+	p, ok := analyzeDDZ(cards)
+	if !ok {
+		t.Fatal("555+666+77 应识别为 planeSingle")
+	}
+	if p.Type != "planeSingle" {
+		t.Errorf("期望 planeSingle, got %s", p.Type)
+	}
+	// 9999+33（对子3拆成两单翼）应识别为 fourTwo
+	cards2 := []Card{
+		tc("♠", "9", 9), tc("♥", "9", 9), tc("♦", "9", 9), tc("♣", "9", 9),
+		tc("♠", "3", 3), tc("♥", "3", 3),
+	}
+	p2, ok := analyzeDDZ(cards2)
+	if !ok {
+		t.Fatal("9999+33 应识别为 fourTwo")
+	}
+	if p2.Type != "fourTwo" {
+		t.Errorf("期望 fourTwo, got %s", p2.Type)
+	}
+}
+
+// 验证 M3 修复：DDZ 结算筹码守恒（输方筹码不足时按比例折扣）
+func TestDDZSettleConservation(t *testing.T) {
+	// 构造一个极简 Room：地主赢，但农民筹码不足以赔付
+	r := &Room{Seats: []*Seat{
+		{Index: 0, PlayerID: "P0", Name: "P0", Chips: 10}, // 农民，筹码不足
+		{Index: 1, PlayerID: "P1", Name: "P1", Chips: 1000},
+		{Index: 2, PlayerID: "P2", Name: "P2", Chips: 1000},
+	}}
+	e := &ddzEngine{
+		occupied:     []int{0, 1, 2},
+		landlordSeat: 1,
+		baseScore:    2,
+		multiplier:   1,
+	}
+	r.Seats[0].Chips = 10
+	r.Seats[1].Chips = 1000
+	r.Seats[2].Chips = 1000
+	_ = e.settle(r, 1) // 地主赢
+	// 守恒：所有人筹码之和不变
+	total := r.Seats[0].Chips + r.Seats[1].Chips + r.Seats[2].Chips
+	if total != 10+1000+1000 {
+		t.Errorf("筹码不守恒: total=%d", total)
+	}
+	// 没有人筹码为负
+	for _, s := range r.Seats {
+		if s.Chips < 0 {
+			t.Errorf("座位 %d 筹码为负: %d", s.Index, s.Chips)
+		}
+	}
+}
+
+// 验证 M3 修复：牛牛结算筹码守恒
+func TestNNSettleConservation(t *testing.T) {
+	r := &Room{Seats: []*Seat{
+		{Index: 0, PlayerID: "P0", Name: "P0", Chips: 5}, // 闲家筹码不足
+		{Index: 1, PlayerID: "P1", Name: "P1", Chips: 1000},
+	}}
+	e := &nnEngine{
+		occupied:    []int{0, 1},
+		dealerIdx:   1, // P1 是庄家
+		currentBet:  10,
+		pot:         20,
+		baseBet:     10,
+		results:     map[int]nnResult{},
+	}
+	e.results[0] = nnResult{Level: 2, Value: 10, Multiplier: 4} // 闲家牛牛
+	e.results[1] = nnResult{Level: 2, Value: 0, Multiplier: 1}  // 庄家没牛
+	_ = e.settle(r)
+	total := r.Seats[0].Chips + r.Seats[1].Chips
+	if total != 5+1000 {
+		t.Errorf("筹码不守恒: total=%d", total)
+	}
+	for _, s := range r.Seats {
+		if s.Chips < 0 {
+			t.Errorf("座位 %d 筹码为负: %d", s.Index, s.Chips)
+		}
+	}
+}
+
+// 验证 235 杀豹子特殊规则（ZJH）
+func TestZJH235KillsTriple(t *testing.T) {
+	aaa := []Card{tc("♠", "A", 14), tc("♥", "A", 14), tc("♦", "A", 14)}
+	two35 := []Card{tc("♠", "2", 2), tc("♥", "3", 3), tc("♦", "5", 5)}
+	aHand, _ := evalZJH(aaa)
+	bHand, _ := evalZJH(two35)
+	if zjhCompare(bHand, aHand) != 1 {
+		t.Error("235 应杀豹子 AAA")
+	}
+	if zjhCompare(aHand, bHand) != -1 {
+		t.Error("豹子 AAA 应输给 235")
+	}
+}
+
+// 验证 235 不杀其他牌型（只杀豹子）
+func TestZJH235OnlyKillsTriple(t *testing.T) {
+	two35 := []Card{tc("♠", "2", 2), tc("♥", "3", 3), tc("♦", "5", 5)}
+	pairKK := []Card{tc("♠", "K", 13), tc("♥", "K", 13), tc("♦", "2", 2)}
+	a, _ := evalZJH(two35)
+	b, _ := evalZJH(pairKK)
+	// 235 是单张(0)，对子(1) 应赢
+	if zjhCompare(a, b) >= 0 {
+		t.Error("235 不应赢对子")
+	}
+}
+
+// 验证 ZJH Score 编码范围不重叠
+func TestZJHScoreRange(t *testing.T) {
+	// 单张最大 A-K-J（非连续，避免误判为顺子）: enc(14,13,11)=14*225+13*15+11=3150+195+11=3356
+	highSingle := []Card{tc("♠", "A", 14), tc("♥", "K", 13), tc("♦", "J", 11)}
+	// 对子最小 2-2-3: 10000+2*15+3=10033
+	lowPair := []Card{tc("♠", "2", 2), tc("♥", "2", 2), tc("♦", "3", 3)}
+	sHand, _ := evalZJH(highSingle)
+	pHand, _ := evalZJH(lowPair)
+	if sHand.Type != 0 {
+		t.Errorf("A-K-J 应为单张(0), got Type=%d", sHand.Type)
+	}
+	if sHand.Score >= pHand.Score {
+		t.Errorf("单张最大 Score=%d 应 < 对子最小 Score=%d", sHand.Score, pHand.Score)
+	}
+	if zjhCompare(sHand, pHand) >= 0 {
+		t.Error("单张不应赢对子（即使最大单张 vs 最小对子）")
+	}
+}

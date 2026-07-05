@@ -12,6 +12,7 @@ type ddzEngine struct {
 	passCount       int
 	phase           string // callLandlord / playing / settled
 	callIdx         int
+	firstCallerIdx  int // 首个叫地主者（用于判定全部 pass 重新发牌）
 	baseScore       int
 	multiplier      int
 	winnerTeam      int // 0=地主胜 1=农民胜
@@ -75,12 +76,13 @@ func (e *ddzEngine) dealAndBid(r *Room) []Event {
 	for i, seatIdx := range e.occupied {
 		hand := deck[i*per : (i+1)*per]
 		r.Seats[seatIdx].Hand = append([]Card{}, hand...)
-		sortByValueDescDDZ(r.Seats[seatIdx].Hand)
+		sortByValueDDZ(r.Seats[seatIdx].Hand)
 	}
 	e.bottomCards = append([]Card{}, deck[3*per:3*per+3]...)
 	e.bottomRevealed = false
 	e.phase = "callLandlord"
 	e.callIdx = r.rnd.Intn(len(e.occupied))
+	e.firstCallerIdx = e.callIdx
 	e.currentSeat = e.callIdx
 
 	evs := []Event{}
@@ -117,7 +119,7 @@ func (e *ddzEngine) HandleAction(r *Room, seat int, action string, data ActionDa
 	if e.phase == "playing" {
 		return e.handlePlay(r, seat, action, data)
 	}
-	return nil
+	return []Event{{Type: "error", Data: ActionData{"msg": "对局已结束"}, Target: seat}}
 }
 
 func (e *ddzEngine) handleCall(r *Room, seat int, action string, data ActionData) []Event {
@@ -133,7 +135,7 @@ func (e *ddzEngine) handleCall(r *Room, seat int, action string, data ActionData
 		e.landlordSeat = seat
 		r.Seats[seat].IsLandlord = true
 		r.Seats[seat].Hand = append(r.Seats[seat].Hand, e.bottomCards...)
-		sortByValueDescDDZ(r.Seats[seat].Hand)
+		sortByValueDDZ(r.Seats[seat].Hand)
 		e.bottomRevealed = true
 		e.phase = "playing"
 		e.currentSeat = e.seatIdxInOccupied(seat)
@@ -151,8 +153,8 @@ func (e *ddzEngine) handleCall(r *Room, seat int, action string, data ActionData
 	}
 	// pass，下一位
 	e.callIdx = (e.callIdx + 1) % len(e.occupied)
-	// 全部 pass → 重新发牌
-	if e.callIdx == e.currentSeat {
+	// 全部 pass（轮回首个叫地主者）→ 重新发牌
+	if e.callIdx == e.firstCallerIdx {
 		evs := []Event{{Type: "phase", Data: ActionData{"phase": "callLandlord", "message": "全部不叫，重新发牌"}, Target: -1}}
 		evs = append(evs, e.dealAndBid(r)...)
 		return evs
@@ -175,7 +177,7 @@ func (e *ddzEngine) handlePlay(r *Room, seat int, action string, data ActionData
 		e.passCount++
 		evs := []Event{{Type: "played", Data: ActionData{"seat": seat, "pass": true}, Target: -1}}
 		e.advanceTurn(r)
-		return evs
+		return append(evs, e.turnEvent(r))
 	}
 	if action != "play" {
 		return []Event{{Type: "error", Data: ActionData{"msg": "操作不支持"}, Target: seat}}
@@ -220,7 +222,19 @@ func (e *ddzEngine) handlePlay(r *Room, seat int, action string, data ActionData
 		return append(evs, e.settle(r, seat)...)
 	}
 	e.advanceTurn(r)
-	return evs
+	return append(evs, e.turnEvent(r))
+}
+
+// turnEvent 出牌阶段发送当前玩家的可操作动作
+func (e *ddzEngine) turnEvent(r *Room) Event {
+	seatIdx := e.occupied[e.currentSeat]
+	actions := []string{"play"}
+	if e.lastPlay != nil {
+		actions = append(actions, "pass")
+	}
+	return Event{Type: "turn", Data: ActionData{
+		"seat": seatIdx, "phase": "playing", "actions": actions,
+	}, Target: -1}
 }
 
 func (e *ddzEngine) advanceTurn(r *Room) {
@@ -240,10 +254,16 @@ func (e *ddzEngine) settle(r *Room, winnerSeat int) []Event {
 	// 地主赢 or 农民赢
 	landlordWin := winnerSeat == e.landlordSeat
 	delta := e.baseScore * e.multiplier
-	evs := []Event{}
-	results := []ActionData{}
+	// 先按名义 delta 计算应付/应收，再做筹码不足时的折扣（守恒）
+	type nominal struct{ seatIdx, d int }
+	noms := make([]nominal, 0, len(e.occupied))
 	for _, seatIdx := range e.occupied {
 		s := r.Seats[seatIdx]
+		// 跳过已腾空座位（OnSeatVacated 中止本局时会调用 settle 路径，但中止走 OnSeatVacated 不走这里；
+		// 此处仅防御：腾空座位不应出现在结算面板）
+		if s.PlayerID == "" {
+			continue
+		}
 		var d int
 		if seatIdx == e.landlordSeat {
 			if landlordWin {
@@ -258,10 +278,47 @@ func (e *ddzEngine) settle(r *Room, winnerSeat int) []Event {
 				d = delta
 			}
 		}
-		s.Chips += d
-		s.SettledDelta = d
-		results = append(results, ActionData{"seat": seatIdx, "name": s.Name, "delta": d, "chips": s.Chips,
-			"isLandlord": seatIdx == e.landlordSeat, "win": d > 0})
+		noms = append(noms, nominal{seatIdx, d})
+	}
+	// 折扣：输家的实际赔付不超过其筹码余额；按比例分给赢家
+	losersTotalCap := 0 // 输方总可赔付上限
+	winnersTotalGain := 0 // 赢方名义总收益
+	for _, nm := range noms {
+		s := r.Seats[nm.seatIdx]
+		if nm.d < 0 {
+			loss := -nm.d
+			if s.Chips < loss {
+				loss = s.Chips
+			}
+			losersTotalCap += loss
+		} else {
+			winnersTotalGain += nm.d
+		}
+	}
+	// 若输方筹码不足，按比例缩减赢家收益
+	scale := 1.0
+	if winnersTotalGain > 0 && losersTotalCap < winnersTotalGain {
+		scale = float64(losersTotalCap) / float64(winnersTotalGain)
+	}
+	evs := []Event{}
+	results := []ActionData{}
+	for _, nm := range noms {
+		s := r.Seats[nm.seatIdx]
+		actualD := nm.d
+		if nm.d < 0 {
+			// 输方赔付不超过自身筹码
+			loss := -nm.d
+			if s.Chips < loss {
+				loss = s.Chips
+			}
+			actualD = -loss
+		} else if nm.d > 0 && scale < 1.0 {
+			actualD = int(float64(nm.d) * scale)
+		}
+		s.Chips += actualD
+		s.SettledDelta = actualD
+		results = append(results, ActionData{"seat": nm.seatIdx, "name": s.Name, "delta": actualD, "chips": s.Chips,
+			"isLandlord": nm.seatIdx == e.landlordSeat, "win": actualD > 0})
 	}
 	e.winnerTeam = map[bool]int{true: 0, false: 1}[landlordWin]
 	evs = append(evs, Event{Type: "phase", Data: ActionData{"phase": "settled", "message": "对局结束", "winnerSeat": winnerSeat, "landlordWin": landlordWin}, Target: -1})
@@ -270,9 +327,6 @@ func (e *ddzEngine) settle(r *Room, winnerSeat int) []Event {
 	// 结束后重置准备状态以便再来一局
 	for _, s := range r.Seats {
 		s.Ready = false
-		if s.Chips < 0 {
-			s.Chips = 0 // 筹码下界封 0
-		}
 	}
 	return evs
 }

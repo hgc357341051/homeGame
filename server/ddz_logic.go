@@ -85,8 +85,8 @@ func analyzeDDZ(cards []Card) (*ddzPlay, bool) {
 	if n == 5 && len(threes) == 1 && len(twos) == 1 {
 		return &ddzPlay{Type: "triplePair", Main: threes[0], Len: 1, Cards: cards}, true
 	}
-	// four + two singles
-	if n == 6 && len(fours) == 1 && len(ones) == 2 {
+	// four + two singles (允许两张单牌点数相同，即一个对子拆成两张单牌)
+	if n == 6 && len(fours) == 1 && len(ones)+2*len(twos) == 2 && len(threes) == 0 {
 		return &ddzPlay{Type: "fourTwo", Main: fours[0], Len: 1, Cards: cards}, true
 	}
 	// four + two pairs
@@ -105,11 +105,11 @@ func analyzeDDZ(cards []Card) (*ddzPlay, bool) {
 	if n >= 6 && n%3 == 0 && len(threes) == n/3 && isConsecutive(threes) && threes[len(threes)-1] <= 14 {
 		return &ddzPlay{Type: "plane", Main: threes[0], Len: len(threes), Cards: cards}, true
 	}
-	// plane + singles: k triples consecutive + k singles
+	// plane + singles: k triples consecutive + k singles (允许翼含同点对子拆分)
 	if len(threes) >= 2 && isConsecutive(threes) && threes[len(threes)-1] <= 14 {
 		k := len(threes)
-		// singles count must equal k (and not part of triples), total = 3k + k
-		if len(ones) == k && n == 4*k {
+		// 翼总张数 = k，可由单牌 + 对子拆分组成；不能含三张/四张
+		if len(ones)+2*len(twos) == k && len(fours) == 0 && n == 4*k {
 			return &ddzPlay{Type: "planeSingle", Main: threes[0], Len: k, Cards: cards}, true
 		}
 		// plane + pairs: k triples + k pairs, total = 3k + 2k

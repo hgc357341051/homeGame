@@ -42,13 +42,13 @@ func evalZJH(cards []Card) (zjhHand, bool) {
 
 	switch {
 	case triple:
-		return zjhHand{Type: 5, Score: 5000 + vs[0], Cards: cards}, true
+		return zjhHand{Type: 5, Score: 50000 + vs[0], Cards: cards}, true
 	case straight && flush:
-		return zjhHand{Type: 4, Score: 4000 + high, Cards: cards}, true
+		return zjhHand{Type: 4, Score: 40000 + high, Cards: cards}, true
 	case flush:
-		return zjhHand{Type: 3, Score: 3000 + enc(vs[2], vs[1], vs[0]), Cards: cards}, true
+		return zjhHand{Type: 3, Score: 30000 + enc(vs[2], vs[1], vs[0]), Cards: cards}, true
 	case straight:
-		return zjhHand{Type: 2, Score: 2000 + high, Cards: cards}, true
+		return zjhHand{Type: 2, Score: 20000 + high, Cards: cards}, true
 	case pair:
 		var pv, kicker int
 		if vs[0] == vs[1] {
@@ -56,7 +56,7 @@ func evalZJH(cards []Card) (zjhHand, bool) {
 		} else {
 			pv, kicker = vs[1], vs[0]
 		}
-		return zjhHand{Type: 1, Score: 1000 + pv*15 + kicker, Cards: cards}, true
+		return zjhHand{Type: 1, Score: 10000 + pv*15 + kicker, Cards: cards}, true
 	default:
 		return zjhHand{Type: 0, Score: enc(vs[2], vs[1], vs[0]), Cards: cards}, true
 	}
@@ -66,7 +66,24 @@ func zjhTypeName(t int) string {
 	return [...]string{"单张", "对子", "顺子", "金花", "顺金", "豹子"}[t]
 }
 
+// is235 判断是否为 2,3,5（不论花色）的散牌。部分地区玩法：235 可击败豹子。
+func is235(cards []Card) bool {
+	if len(cards) != 3 {
+		return false
+	}
+	vs := zjhSortedVals(cards)
+	return vs[0] == 2 && vs[1] == 3 && vs[2] == 5
+}
+
 func zjhCompare(a, b zjhHand) int {
+	// 特殊规则：235 杀豹子（仅当一方为 235 散牌、另一方为豹子时生效）
+	a235, b235 := is235(a.Cards), is235(b.Cards)
+	if a235 && b.Type == 5 {
+		return 1
+	}
+	if b235 && a.Type == 5 {
+		return -1
+	}
 	if a.Score > b.Score {
 		return 1
 	}
@@ -277,8 +294,7 @@ func (e *zjhEngine) HandleAction(r *Room, seat int, action string, data ActionDa
 		evs := []Event{
 			{Type: "phase", Data: ActionData{"event": "look", "seat": seat, "name": s.Name}, Target: -1},
 		}
-		// 看牌不消耗轮次？规则上仍轮到下一家。这里看牌后直接轮转
-		e.nextActive(r)
+		// 看牌不消耗轮次（与 lookCard/reveal 保持一致）：玩家仍需 call/raise/fold/compare
 		return append(evs, e.turnEvent(r))
 	case "lookCard":
 		// 蒙牌模式：逐张看牌。不消耗轮次，玩家可连续看多张后再 call/raise/fold/reveal
@@ -496,9 +512,6 @@ func (e *zjhEngine) settleByFold(r *Room) []Event {
 	for _, s := range r.Seats {
 		s.Ready = false
 		s.CurrentBet = 0
-		if s.Chips < 0 {
-			s.Chips = 0 // 筹码下界封 0
-		}
 	}
 	return evs
 }
