@@ -19,6 +19,8 @@ const copied = ref(false)
 const revealVisible = ref(false)
 const isMobile = ref(false)
 let revealTimer: any = null
+let resizeTimer: any = null
+let joinCancelled = false
 
 const room = computed(() => store.room)
 const phase = computed(() => room.value?.phase)
@@ -55,6 +57,12 @@ const phaseMessage = computed(() => publicArea.value?.message || store.phaseMsg)
 
 function checkMobile() {
   isMobile.value = window.innerWidth < 900
+}
+
+// resize 防抖：避免拖拽窗口时频繁触发 reflow
+function onResize() {
+  if (resizeTimer) clearTimeout(resizeTimer)
+  resizeTimer = setTimeout(checkMobile, 150)
 }
 
 function seatAngle(seatIndex: number): number {
@@ -122,8 +130,11 @@ watch(
 )
 
 async function joinRoom() {
+  joinCancelled = false
   try {
     await store.connect()
+    // 组件已卸载或已切换房间时不再发送 joinRoom
+    if (joinCancelled) return
     store.joinRoom(props.code.toUpperCase())
   } catch {
     /* 错误已由 store 提示 */
@@ -165,13 +176,25 @@ onMounted(() => {
     store.setName('玩家' + Math.random().toString(36).slice(2, 8).toUpperCase())
   }
   checkMobile()
-  window.addEventListener('resize', checkMobile)
+  window.addEventListener('resize', onResize)
   joinRoom()
 })
 
+// watch code 变化（room/A → room/B 直跳时路由守卫已清理，需重新加入）
+watch(
+  () => props.code,
+  (newCode, oldCode) => {
+    if (newCode && newCode.toUpperCase() !== oldCode?.toUpperCase()) {
+      joinRoom()
+    }
+  },
+)
+
 onUnmounted(() => {
+  joinCancelled = true
   if (revealTimer) clearTimeout(revealTimer)
-  window.removeEventListener('resize', checkMobile)
+  if (resizeTimer) clearTimeout(resizeTimer)
+  window.removeEventListener('resize', onResize)
 })
 </script>
 

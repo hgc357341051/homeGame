@@ -134,12 +134,17 @@ export const useGameStore = defineStore('game', () => {
           const msg: ServerMessage = JSON.parse(ev.data)
           handle(msg)
         } catch (e) {
-          /* ignore */
+          console.error('[WS] 消息解析失败:', ev.data, e)
         }
       }
       ws.onerror = () => {
         connecting.value = false
         if (!isReconnect) showError('网络连接异常')
+        // 立即 reject，避免 connectPromise 挂起直到超时
+        if (!settled) {
+          settled = true
+          reject(new Error('WebSocket 连接错误'))
+        }
       }
       ws.onclose = () => {
         connected.value = false
@@ -182,6 +187,8 @@ export const useGameStore = defineStore('game', () => {
   }
 
   function joinRoom(code: string) {
+    // 去重：已加入同一房间且连接正常时不重复发送 joinRoom
+    if (joinedCode === code && socket && socket.readyState === WebSocket.OPEN) return
     // 记录已加入的房间号，断线重连时自动重新加入
     joinedCode = code
     // 进入新房间：清除主动关闭标记，确保断线后可正常重连
@@ -288,6 +295,11 @@ export const useGameStore = defineStore('game', () => {
     stopHeartbeat()
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
     reconnecting.value = false
+    failed.value = false
+    connecting.value = false
+    reconnectAttempts = 0
+    if (errorTimer) { clearTimeout(errorTimer); errorTimer = null }
+    errorToast.value = ''
     room.value = null
     myHand.value = []
     chat.value = []

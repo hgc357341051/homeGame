@@ -267,10 +267,12 @@ func (r *Room) handleDisconnect(c *Client) {
 		}
 	}
 	r.broadcastStateAsync()
+	// 快照 phase，避免 Unlock 后读取 r.Phase 产生数据竞争
+	phase := r.Phase
 	r.mu.Unlock()
 	// 仅当该连接确实在房间内时才提示（避免僵尸连接替换后误报）
 	if found && leaveName != "" {
-		if r.Phase == "playing" {
+		if phase == "playing" {
 			r.systemChat(leaveName + " 掉线了（座位保留 3 分钟）")
 		} else {
 			r.systemChat(leaveName + " 离开了房间")
@@ -469,6 +471,7 @@ func (r *Room) applyAction(c *Client, action string, data ActionData) {
 
 func (r *Room) standLocked(seat int) {
 	s := r.Seats[seat]
+	wasHost := s.PlayerID == r.HostID
 	s.Client = nil
 	s.PlayerID = ""
 	s.Name = ""
@@ -487,6 +490,20 @@ func (r *Room) standLocked(seat int) {
 	s.IsRevealed = false
 	s.DisconnectedAt = time.Time{}
 	s.Chips = startChips // 重置筹码，避免新入座者继承前任筹码
+	// 房主离开（非对局中）时自动转移房主给最早的在座玩家
+	if wasHost && (r.Phase == "waiting" || r.Phase == "settled") {
+		r.transferHostLocked()
+	}
+}
+
+// transferHostLocked 将房主转移给最早入座的玩家（调用方需持有 r.mu）
+func (r *Room) transferHostLocked() {
+	for _, s := range r.Seats {
+		if s.occupied() && s.PlayerID != "" {
+			r.HostID = s.PlayerID
+			return
+		}
+	}
 }
 
 func (r *Room) handleSit(c *Client, data ActionData) {
@@ -673,8 +690,12 @@ func (r *Room) handleStart(c *Client, data ActionData) {
 		return
 	}
 	// 房主可在开局数据中指定蒙牌模式（仅炸金花生效）
-	if v, ok := data["blindMode"].(bool); ok {
-		r.BlindMode = v
+	if r.Game == "zjh" {
+		if v, ok := data["blindMode"].(bool); ok {
+			r.BlindMode = v
+		} else {
+			r.BlindMode = false
+		}
 	} else {
 		r.BlindMode = false
 	}

@@ -56,7 +56,15 @@ func (h *Hub) run() {
 	for {
 		select {
 		case c := <-h.register:
+			// 原子 check-and-insert：防止 genUniqueID 的 TOCTOU 竞争
+			// （两个并发连接可能拿到相同的 ID，先各自判断不存在，再先后插入）
 			h.mu.Lock()
+			for {
+				if _, exists := h.clients[c.playerID]; !exists {
+					break
+				}
+				c.playerID = genID()
+			}
 			h.clients[c.playerID] = c
 			h.mu.Unlock()
 		case c := <-h.unregister:
@@ -79,6 +87,8 @@ func (c *Client) sendMsg(m Message) {
 	if err != nil {
 		return
 	}
+	// recover 防止向已关闭的 send channel 发送导致整个进程 panic
+	defer func() { _ = recover() }()
 	select {
 	case c.send <- b:
 	default:

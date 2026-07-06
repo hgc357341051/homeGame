@@ -19,7 +19,11 @@ const selectedKeys = ref<Set<string>>(new Set())
 
 watch(
   () => props.cards,
-  () => selectedKeys.value.clear(),
+  () => {
+    selectedKeys.value.clear()
+    // 牌变化时通知父组件选择已清空，避免父组件持有过期选择
+    emit('change', [])
+  },
 )
 
 // 根据牌数与尺寸动态计算重叠间距，避免大量牌时溢出
