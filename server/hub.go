@@ -38,7 +38,6 @@ type Client struct {
 type Hub struct {
 	clients    map[string]*Client
 	rm         *RoomManager
-	register   chan *Client
 	unregister chan *Client
 	mu         sync.Mutex
 }
@@ -47,7 +46,6 @@ func newHub() *Hub {
 	return &Hub{
 		clients:    make(map[string]*Client),
 		rm:         newRoomManager(),
-		register:   make(chan *Client, 64),
 		unregister: make(chan *Client, 64),
 	}
 }
@@ -55,18 +53,6 @@ func newHub() *Hub {
 func (h *Hub) run() {
 	for {
 		select {
-		case c := <-h.register:
-			// 原子 check-and-insert：防止 genUniqueID 的 TOCTOU 竞争
-			// （两个并发连接可能拿到相同的 ID，先各自判断不存在，再先后插入）
-			h.mu.Lock()
-			for {
-				if _, exists := h.clients[c.playerID]; !exists {
-					break
-				}
-				c.playerID = genID()
-			}
-			h.clients[c.playerID] = c
-			h.mu.Unlock()
 		case c := <-h.unregister:
 			h.mu.Lock()
 			// 仅当 map 中仍是该 client 时才删除（避免删除掉已替换的新连接）
@@ -80,6 +66,22 @@ func (h *Hub) run() {
 			close(c.send)
 		}
 	}
+}
+
+// registerLocked 同步注册客户端，避免 readPump 的 "enter" 消息在注册前到达
+// 导致 playerID 被 hub.run 的注册逻辑覆盖（race condition）。
+// 调用方不应持有 h.mu。
+func (h *Hub) registerLocked(c *Client) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	// 原子 check-and-insert：防止 genUniqueID 的 TOCTOU 竞争
+	for {
+		if _, exists := h.clients[c.playerID]; !exists {
+			break
+		}
+		c.playerID = genID()
+	}
+	h.clients[c.playerID] = c
 }
 
 func (c *Client) sendMsg(m Message) {
@@ -162,7 +164,9 @@ func serveWS(hub *Hub, w http.ResponseWriter, r *http.Request) {
 		send:     make(chan []byte, 256),
 		playerID: hub.genUniqueID(),
 	}
-	hub.register <- client
+	// 同步注册：避免 readPump 的 "enter" 消息在异步注册前到达，
+	// 导致 hub.run 用新 genID() 覆盖客户端携带的 playerId（座位无法夺回）。
+	hub.registerLocked(client)
 	go client.writePump()
 	client.readPump()
 }

@@ -967,3 +967,52 @@ func TestNNSettleTruncationFix(t *testing.T) {
 		t.Errorf("截断误差导致筹码不守恒: final=%d, expected=%d（消失 %d）", finalTotal, initialTotal, initialTotal-finalTotal)
 	}
 }
+
+// 验证 hub.registerLocked 同步注册：注册后客户端立即在 hub.clients 中可见，
+// 后续 "enter" 切换 playerId 时能正确删除旧条目、建立新条目（座位夺回的前提）。
+// 修复前 serveWS 将 client 发到异步 register channel 后立即启动 readPump，
+// 若 "enter" 在 hub.run 处理注册前到达，hub.run 会用新 genID() 覆盖 enter 设置的 playerId。
+func TestHubRegisterLockedSync(t *testing.T) {
+	h := newHub()
+	c := &Client{hub: h, playerID: "INITIAL", send: make(chan []byte, 8)}
+	// 同步注册：调用返回后客户端必须已在 map 中
+	h.registerLocked(c)
+	if got := h.clients["INITIAL"]; got != c {
+		t.Fatalf("registerLocked 后 hub.clients[INITIAL] 应为 c, got %v", got)
+	}
+	// 模拟 "enter" 携带存储的 playerId 切换身份（roommanager.go 的 enter 分支逻辑）
+	newPid := "STORED_PID"
+	h.mu.Lock()
+	delete(h.clients, c.playerID)
+	c.playerID = newPid
+	h.clients[newPid] = c
+	h.mu.Unlock()
+	if _, exists := h.clients["INITIAL"]; exists {
+		t.Errorf("切换 playerId 后旧条目应删除")
+	}
+	if got := h.clients[newPid]; got != c {
+		t.Errorf("切换后 hub.clients[%s] 应为 c, got %v", newPid, got)
+	}
+	if c.playerID != newPid {
+		t.Errorf("c.playerID 应为 %s, got %s", newPid, c.playerID)
+	}
+}
+
+// 验证 registerLocked 处理 ID 冲突：若初始 playerID 已被占用，应自动生成新 ID。
+func TestHubRegisterLockedCollision(t *testing.T) {
+	h := newHub()
+	first := &Client{hub: h, playerID: "DUP", send: make(chan []byte, 8)}
+	h.registerLocked(first)
+	// 第二个 client 用相同 playerID，应被分配新 ID
+	second := &Client{hub: h, playerID: "DUP", send: make(chan []byte, 8)}
+	h.registerLocked(second)
+	if second.playerID == "DUP" {
+		t.Errorf("冲突 playerID 应被替换为新 ID")
+	}
+	if got := h.clients["DUP"]; got != first {
+		t.Errorf("首个 client 应仍占据 DUP, got %v", got)
+	}
+	if got := h.clients[second.playerID]; got != second {
+		t.Errorf("第二个 client 应在新 ID 下注册, got %v", got)
+	}
+}
