@@ -825,7 +825,7 @@ func (r *Room) tryReclaim(c *Client) bool {
 			s.DisconnectedAt = time.Time{}
 			// 补发手牌：掉线期间手牌仍保留在 Seat.Hand，但 deal 事件未持久化，
 			// 重连后需重新发送，否则玩家看不到自己的牌
-			c.sendMsg(Message{Type: "deal", Data: ActionData{"cards": r.Engine.PlayerHand(s)}})
+			r.sendDealForReclaim(c, s)
 			// 重连后补发当前轮次信息，使玩家能立即看到可用操作
 			r.Engine.ResendTurn(r, c)
 			return true
@@ -836,10 +836,23 @@ func (r *Room) tryReclaim(c *Client) bool {
 			s.Client = c
 			s.DisconnectedAt = time.Time{}
 			// 同样补发手牌（新连接尚未收到 deal 事件）
-			c.sendMsg(Message{Type: "deal", Data: ActionData{"cards": r.Engine.PlayerHand(s)}})
+			r.sendDealForReclaim(c, s)
 			r.Engine.ResendTurn(r, c)
 			return true
 		}
 	}
 	return false
+}
+
+// sendDealForReclaim 重连/换座时补发手牌。蒙牌模式下需携带 blindMode 和 lookedIndices，
+// 否则前端无法区分"未查看的牌"与"空牌"，导致牌背显示为空白。
+func (r *Room) sendDealForReclaim(c *Client, s *Seat) {
+	dealData := ActionData{"cards": r.Engine.PlayerHand(s)}
+	if r.Game == "zjh" && r.BlindMode && !s.IsRevealed {
+		dealData["blindMode"] = true
+		if s.LookedIndices != nil {
+			dealData["lookedIndices"] = append([]bool{}, s.LookedIndices...)
+		}
+	}
+	c.sendMsg(Message{Type: "deal", Data: dealData})
 }

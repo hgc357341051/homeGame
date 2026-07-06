@@ -648,6 +648,46 @@ func TestReclaimResendsHand(t *testing.T) {
 	}
 }
 
+// 验证蒙牌模式重连补发手牌时携带 blindMode 和 lookedIndices
+func TestReclaimBlindModeHandFlags(t *testing.T) {
+	oldClient := &Client{playerID: "P1", name: "玩家1", send: make(chan []byte, 8)}
+	e := &zjhEngine{blindMode: true}
+	r := &Room{
+		Code:      "TEST",
+		Game:      "zjh",
+		HostID:    "P1",
+		Phase:     "playing",
+		Engine:    e,
+		BlindMode: true,
+		Seats: []*Seat{
+			{Index: 0, PlayerID: "P1", Name: "玩家1", Chips: 1000, Client: oldClient,
+				Hand:           []Card{tc("♠", "A", 14), tc("♥", "K", 13), tc("♦", "Q", 12)},
+				LookedIndices:  []bool{true, false, false},
+				IsRevealed:     false},
+		},
+	}
+	oldClient.room = r
+	// 模拟掉线
+	r.Seats[0].Client = nil
+	r.Seats[0].DisconnectedAt = time.Now()
+
+	newClient := &Client{playerID: "P1", name: "玩家1", send: make(chan []byte, 8)}
+	newClient.room = r
+	r.tryReclaim(newClient)
+
+	msg := recvMsg(newClient.send)
+	if msg == nil || msg.Type != "deal" {
+		t.Fatal("应收到 deal 消息")
+	}
+	data, _ := msg.Data.(map[string]interface{})
+	if bm, ok := data["blindMode"]; !ok || bm != true {
+		t.Error("蒙牌模式重连应携带 blindMode=true")
+	}
+	if _, ok := data["lookedIndices"]; !ok {
+		t.Error("蒙牌模式重连应携带 lookedIndices")
+	}
+}
+
 // 验证房主在对局中掉线（座位保留）时房主身份不立即转移，等待重连
 func TestHostInGameDisconnectKeepsHostForReconnect(t *testing.T) {
 	hostClient := &Client{playerID: "HOST", name: "房主", send: make(chan []byte, 8)}
