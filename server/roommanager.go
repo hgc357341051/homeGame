@@ -47,6 +47,10 @@ func (rm *RoomManager) reaper() {
 						seatIdx := s.Index
 						room.standLocked(seatIdx)
 						evs := room.Engine.OnSeatVacated(room, seatIdx)
+						// 对局可能因腾空而结束：确保房主有效
+						if room.Phase == "settled" {
+							room.ensureHostLocked()
+						}
 						pa.sysMsg = name + " 掉线超时，座位已释放"
 						pa.evs = evs
 						pa.needBcast = true

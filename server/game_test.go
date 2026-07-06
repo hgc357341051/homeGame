@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func tc(suit, rank string, v int) Card { return Card{Suit: suit, Rank: rank, Value: v} }
 
@@ -243,5 +246,108 @@ func TestZJHScoreRange(t *testing.T) {
 	}
 	if zjhCompare(sHand, pHand) >= 0 {
 		t.Error("单张不应赢对子（即使最大单张 vs 最小对子）")
+	}
+}
+
+// 验证 ensureHostLocked：房主离线后转移给最早在线在座玩家
+func TestEnsureHostLockedTransfersWhenHostGone(t *testing.T) {
+	r := &Room{
+		HostID: "HOST",
+		Phase:  "settled",
+		Seats: []*Seat{
+			{Index: 0, PlayerID: "HOST", Name: "H", Chips: 1000, Client: nil, DisconnectedAt: time.Time{}}, // 已腾空
+			{Index: 1, PlayerID: "P1", Name: "P1", Chips: 1000, Client: &Client{playerID: "P1"}},
+			{Index: 2, PlayerID: "P2", Name: "P2", Chips: 1000, Client: &Client{playerID: "P2"}},
+		},
+	}
+	r.ensureHostLocked()
+	if r.HostID != "P1" {
+		t.Errorf("房主应转移给 P1, got HostID=%s", r.HostID)
+	}
+}
+
+// 验证 ensureHostLocked：房主仍在线在座时不转移
+func TestEnsureHostLockedKeepsOnlineHost(t *testing.T) {
+	r := &Room{
+		HostID: "HOST",
+		Phase:  "settled",
+		Seats: []*Seat{
+			{Index: 0, PlayerID: "HOST", Name: "H", Chips: 1000, Client: &Client{playerID: "HOST"}},
+			{Index: 1, PlayerID: "P1", Name: "P1", Chips: 1000, Client: &Client{playerID: "P1"}},
+		},
+	}
+	r.ensureHostLocked()
+	if r.HostID != "HOST" {
+		t.Errorf("房主仍在线不应转移, got HostID=%s", r.HostID)
+	}
+}
+
+// 验证 ensureHostLocked：房主在线旁观时不转移
+func TestEnsureHostLockedKeepsSpectatorHost(t *testing.T) {
+	r := &Room{
+		HostID:     "HOST",
+		Phase:      "settled",
+		Spectators: []*Client{{playerID: "HOST"}},
+		Seats: []*Seat{
+			{Index: 0, PlayerID: "P1", Name: "P1", Chips: 1000, Client: &Client{playerID: "P1"}},
+		},
+	}
+	r.ensureHostLocked()
+	if r.HostID != "HOST" {
+		t.Errorf("房主在线旁观不应转移, got HostID=%s", r.HostID)
+	}
+}
+
+// 验证 ensureHostLocked：房主掉线（座位保留但 Client=nil）时转移
+func TestEnsureHostLockedTransfersWhenHostOffline(t *testing.T) {
+	r := &Room{
+		HostID: "HOST",
+		Phase:  "settled",
+		Seats: []*Seat{
+			{Index: 0, PlayerID: "HOST", Name: "H", Chips: 1000, Client: nil, DisconnectedAt: time.Now()},
+			{Index: 1, PlayerID: "P1", Name: "P1", Chips: 1000, Client: &Client{playerID: "P1"}},
+		},
+	}
+	r.ensureHostLocked()
+	if r.HostID != "P1" {
+		t.Errorf("房主掉线应转移给 P1, got HostID=%s", r.HostID)
+	}
+}
+
+// 验证 handleLeave 对局中房主离场后房主转移（集成测试）
+func TestHandleLeaveHostTransferDuringPlaying(t *testing.T) {
+	hostClient := &Client{playerID: "HOST", name: "房主"}
+	p1Client := &Client{playerID: "P1", name: "玩家1"}
+	r := &Room{
+		Code:   "TEST",
+		Game:   "zjh",
+		HostID: "HOST",
+		Phase:  "playing",
+		Engine: &zjhEngine{},
+		Seats: []*Seat{
+			{Index: 0, PlayerID: "HOST", Name: "房主", Chips: 1000, Client: hostClient},
+			{Index: 1, PlayerID: "P1", Name: "玩家1", Chips: 1000, Client: p1Client},
+		},
+	}
+	hostClient.room = r
+	p1Client.room = r
+	// 初始化引擎状态：2人在座
+	e := r.Engine.(*zjhEngine)
+	e.occupied = []int{0, 1}
+	e.phase = "betting"
+	e.activeCount = 2
+	e.baseBet = 2
+	e.currentBet = 2
+	e.pot = 4
+	e.currentSeat = 0
+	r.Seats[0].CurrentBet = 2
+	r.Seats[1].CurrentBet = 2
+	// 房主离开
+	r.handleLeave(hostClient)
+	if r.Phase != "settled" {
+		t.Errorf("房主离开后应结算, got Phase=%s", r.Phase)
+	}
+	if r.HostID != "P1" {
+		t.Errorf("房主应转移给 P1, got HostID=%s", r.HostID)
 	}
 }

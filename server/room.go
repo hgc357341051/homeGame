@@ -292,6 +292,10 @@ func (r *Room) cleanupOfflineSeatsLocked() {
 			if r.Phase == "playing" {
 				r.emitEvents(r.Engine.OnSeatVacated(r, seatIdx))
 			}
+			// 对局可能因腾空而结束：确保房主有效
+			if r.Phase == "settled" {
+				r.ensureHostLocked()
+			}
 		}
 	}
 }
@@ -320,6 +324,9 @@ func (r *Room) handleLeave(c *Client) {
 	var evs []Event
 	if vacatedSeat >= 0 && r.Phase == "playing" {
 		evs = r.Engine.OnSeatVacated(r, vacatedSeat)
+	}
+	if r.Phase == "settled" {
+		r.ensureHostLocked()
 	}
 	r.mu.Unlock()
 	if leaveName != "" {
@@ -356,6 +363,9 @@ func (r *Room) handleKick(c *Client, data ActionData) {
 	var evs []Event
 	if r.Phase == "playing" {
 		evs = r.Engine.OnSeatVacated(r, seatNum)
+	}
+	if r.Phase == "settled" {
+		r.ensureHostLocked()
 	}
 	r.mu.Unlock()
 	r.systemChat("房主踢出了掉线的 " + kickName)
@@ -464,6 +474,10 @@ func (r *Room) applyAction(c *Client, action string, data ActionData) {
 		return
 	}
 	evs := r.Engine.HandleAction(r, seat, action, data)
+	// 对局结束（房主可能已掉线/离场）：在锁内确保房主有效，避免房间无人可开局
+	if r.Phase == "settled" {
+		r.ensureHostLocked()
+	}
 	r.mu.Unlock()
 	r.emitEvents(evs)
 	r.broadcastState()
@@ -506,10 +520,40 @@ func (r *Room) transferHostLocked() {
 	}
 }
 
+// ensureHostLocked 确保房主仍在线（在座或旁观）；若房主已离线/离场则转移给最早在线在座玩家。
+// 用于对局结束（phase→settled）时修复"房主在对局中掉线/离场后房间无人可开局"的死锁。
+// 调用方需持有 r.mu。
+func (r *Room) ensureHostLocked() {
+	// 房主仍在线在座
+	for _, s := range r.Seats {
+		if s.PlayerID == r.HostID && s.occupied() {
+			return
+		}
+	}
+	// 房主仍在线旁观
+	for _, sp := range r.Spectators {
+		if sp.playerID == r.HostID {
+			return
+		}
+	}
+	// 房主已离线/离场，转移给最早在线在座玩家
+	for _, s := range r.Seats {
+		if s.occupied() {
+			r.HostID = s.PlayerID
+			return
+		}
+	}
+}
+
 func (r *Room) handleSit(c *Client, data ActionData) {
 	r.mu.Lock()
 	// 已在座则换座（仅等待阶段）
 	cur := r.findSeat(c.playerID)
+	if cur >= 0 && r.Phase == "playing" {
+		// 对局中已在座：保持原座位，忽略重复 sit 请求
+		r.mu.Unlock()
+		return
+	}
 	if cur >= 0 && r.Phase != "playing" {
 		r.standLocked(cur)
 	}
@@ -545,6 +589,12 @@ func (r *Room) handleSit(c *Client, data ActionData) {
 		return
 	}
 	s := r.Seats[seat]
+	// 对局中仅允许接管掉线座位（继承手牌）；禁止新入座空座位（无手牌无法参与本局）
+	if r.Phase == "playing" && !s.isOffline() {
+		r.mu.Unlock()
+		c.emitError("对局进行中，请等待本局结束后入座")
+		return
+	}
 	inheritHand := r.Phase == "playing" && len(s.Hand) > 0 && s.isOffline()
 	s.Client = c
 	s.PlayerID = c.playerID
