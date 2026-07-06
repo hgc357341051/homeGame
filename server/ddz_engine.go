@@ -15,7 +15,6 @@ type ddzEngine struct {
 	firstCallerIdx  int // 首个叫地主者（用于判定全部 pass 重新发牌）
 	baseScore       int
 	multiplier      int
-	winnerTeam      int // 0=地主胜 1=农民胜
 }
 
 func (e *ddzEngine) Name() string  { return "ddz" }
@@ -39,7 +38,6 @@ func (e *ddzEngine) OnSeatVacated(r *Room, seat int) []Event {
 	for _, s := range r.Seats {
 		s.Ready = false
 		s.Hand = nil
-		s.IsLandlord = false
 	}
 	// 生成结算事件（delta=0 平局），让前端能正常显示结算面板并重启
 	results := []ActionData{}
@@ -321,7 +319,6 @@ func (e *ddzEngine) settle(r *Room, winnerSeat int) []Event {
 		results = append(results, ActionData{"seat": nm.seatIdx, "name": s.Name, "delta": actualD, "chips": s.Chips,
 			"isLandlord": nm.seatIdx == e.landlordSeat, "win": actualD > 0})
 	}
-	e.winnerTeam = map[bool]int{true: 0, false: 1}[landlordWin]
 	evs = append(evs, Event{Type: "phase", Data: ActionData{"phase": "settled", "message": "对局结束", "winnerSeat": winnerSeat, "landlordWin": landlordWin}, Target: -1})
 	evs = append(evs, Event{Type: "settle", Data: ActionData{"results": results, "game": "ddz", "landlordWin": landlordWin, "multiplier": e.multiplier}, Target: -1})
 	r.Phase = "settled"
@@ -344,6 +341,15 @@ func (e *ddzEngine) PublicArea(r *Room) PublicAreaView {
 		v.LastPlay = e.lastPlay
 	}
 	return v
+}
+
+// ResendTurn 重连后补发当前轮次信息
+func (e *ddzEngine) ResendTurn(r *Room, c *Client) {
+	if e.phase != "callLandlord" && e.phase != "playing" {
+		return
+	}
+	ev := e.turnEvent(r)
+	c.sendMsg(Message{Type: ev.Type, Data: ev.Data})
 }
 
 // extractCards 从前端传来的 []interface{} 解析出 Card 列表

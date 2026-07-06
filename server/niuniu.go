@@ -209,9 +209,23 @@ type nnEngine struct {
 	currentSeat    int // occupied 索引，押注轮到的玩家
 	actedThisRound []bool // 本轮押注中各 occupied 索引是否已行动
 	phase          string // betting / setNiu / settled
-	setCount       int
 	results        map[int]nnResult // seat -> 结果
 	totalSeats     int
+}
+
+// allActiveSetNiu 检查所有未弃牌、未腾空的玩家是否都已确认凑牛。
+// 直接检查 results map 而非依赖计数器，避免玩家凑牛后离场导致计数器与实际不符。
+func (e *nnEngine) allActiveSetNiu(r *Room) bool {
+	for _, seatIdx := range e.occupied {
+		s := r.Seats[seatIdx]
+		if s.IsFolded || s.PlayerID == "" {
+			continue
+		}
+		if _, done := e.results[seatIdx]; !done {
+			return false
+		}
+	}
+	return true
 }
 
 func (e *nnEngine) Name() string    { return "nn" }
@@ -254,14 +268,8 @@ func (e *nnEngine) OnSeatVacated(r *Room, seat int) []Event {
 		}
 		return []Event{e.turnEvent(r)}
 	}
-	// setNiu 阶段：若所有非弃牌玩家都已凑牛，则直接结算
-	expected := 0
-	for _, seatIdx := range e.occupied {
-		if !r.Seats[seatIdx].IsFolded {
-			expected++
-		}
-	}
-	if e.setCount >= expected {
+	// setNiu 阶段：若所有未弃牌玩家都已凑牛，则直接结算
+	if e.allActiveSetNiu(r) {
 		return e.settle(r)
 	}
 	return nil
@@ -275,7 +283,6 @@ func (e *nnEngine) Start(r *Room) []Event {
 	e.cap = 32
 	e.pot = 0
 	e.phase = "betting"
-	e.setCount = 0
 	e.results = map[int]nnResult{}
 	e.occupied = nil
 	for _, s := range r.Seats {
@@ -297,7 +304,6 @@ func (e *nnEngine) Start(r *Room) []Event {
 		r.Seats[seatIdx].IsDealer = false
 		r.Seats[seatIdx].HasNiu = false
 		r.Seats[seatIdx].NiuValue = 0
-		r.Seats[seatIdx].NiuName = ""
 		r.Seats[seatIdx].NiuCards = nil
 		r.Seats[seatIdx].IsFolded = false
 	}
@@ -366,7 +372,6 @@ func (e *nnEngine) bettingRoundComplete(r *Room) bool {
 // enterSetNiu 押注结束，进入凑牛阶段
 func (e *nnEngine) enterSetNiu(r *Room) []Event {
 	e.phase = "setNiu"
-	e.setCount = 0
 	dealerSeat := e.occupied[e.dealerIdx]
 	evs := []Event{Event{Type: "phase", Data: ActionData{
 		"phase": "setNiu", "message": "选择 3 张凑牛（或自动）",
@@ -405,37 +410,16 @@ func (e *nnEngine) settleByFold(r *Room) []Event {
 		}
 	}
 	evs := []Event{}
-	// 无赢家（全员离场/弃牌）：退还各自已下注码，避免底池凭空消失
-	if winner < 0 {
-		results := []ActionData{}
-		for _, seatIdx := range e.occupied {
-			s := r.Seats[seatIdx]
-			s.Chips += s.CurrentBet
-			s.SettledDelta = 0
-			results = append(results, ActionData{
-				"seat": seatIdx, "name": s.Name, "delta": 0, "chips": s.Chips,
-				"isFolded": s.IsFolded, "win": false,
-			})
-		}
-		e.pot = 0
-		r.Phase = "settled"
-		for _, s := range r.Seats {
-			s.Ready = false
-			s.CurrentBet = 0
-		}
-		evs = append(evs, Event{Type: "settle", Data: ActionData{
-			"results": results, "game": "nn", "winnerSeat": -1, "aborted": true,
-		}, Target: -1})
-		evs = append(evs, Event{Type: "phase", Data: ActionData{
-			"phase": "settled", "message": "全员离场，本局中止",
-		}, Target: -1})
-		return evs
-	}
 	results := []ActionData{}
+	aborted := winner < 0
 	for _, seatIdx := range e.occupied {
 		s := r.Seats[seatIdx]
 		var d int
-		if seatIdx == winner {
+		if aborted {
+			// 全员弃牌/腾空：退还已下注码，净盈亏为 0，避免底池筹码凭空消失
+			s.Chips += s.CurrentBet
+			d = 0
+		} else if seatIdx == winner {
 			d = e.pot - s.CurrentBet
 			s.Chips += e.pot
 		} else {
@@ -449,11 +433,13 @@ func (e *nnEngine) settleByFold(r *Room) []Event {
 	}
 	e.pot = 0
 	msg := "对局结束"
-	if winner >= 0 {
+	if aborted {
+		msg = "全员弃牌，本局中止（注码退还）"
+	} else {
 		msg = "其他玩家弃牌，" + r.Seats[winner].Name + " 获胜"
 	}
 	evs = append(evs, Event{Type: "settle", Data: ActionData{
-		"results": results, "game": "nn", "winnerSeat": winner,
+		"results": results, "game": "nn", "winnerSeat": winner, "aborted": aborted,
 	}, Target: -1})
 	evs = append(evs, Event{Type: "phase", Data: ActionData{
 		"phase": "settled", "message": msg,
@@ -568,7 +554,9 @@ func (e *nnEngine) handleSetNiu(r *Room, seat int, action string, data ActionDat
 	// 计算：若玩家选了 3 张，校验其和是否为 10 倍数；否则自动最佳
 	allCards := s.Hand
 	res := evalNN(allCards)
-	if valid {
+	// 特殊牌型（五小牛/炸弹牛/五花牛）由系统自动判定，玩家选择不覆盖
+	// 避免玩家误选3张把7倍五小牛变成1倍没牛
+	if valid && res.Level < 3 {
 		// 用玩家选择的 3 张作为牛牌，重新算 value
 		rest := []Card{}
 		_, _ = removeCards(s.Hand, chosen) // 已校验
@@ -608,20 +596,12 @@ func (e *nnEngine) handleSetNiu(r *Room, seat int, action string, data ActionDat
 	e.results[seat] = res
 	s.HasNiu = res.Value > 0 || res.Level > 2
 	s.NiuValue = res.Value
-	s.NiuName = nnName(res)
 	if res.NiuCards != nil {
 		s.NiuCards = res.NiuCards
 	}
-	e.setCount++
 	evs := []Event{{Type: "phase", Data: ActionData{"event": "niuniuSet", "seat": seat, "name": s.Name, "name2": nnName(res)}, Target: -1}}
-	// 仅统计非弃牌玩家是否都已凑牛
-	expected := 0
-	for _, seatIdx := range e.occupied {
-		if !r.Seats[seatIdx].IsFolded {
-			expected++
-		}
-	}
-	if e.setCount >= expected {
+	// 所有未弃牌玩家都已凑牛则结算
+	if e.allActiveSetNiu(r) {
 		return append(evs, e.settle(r)...)
 	}
 	return evs
@@ -659,8 +639,7 @@ func (e *nnEngine) settle(r *Room) []Event {
 			"niuCards": res.NiuCards, "niuName": nnName(res), "multiplier": res.Multiplier,
 		}, Target: -1})
 	}
-	// deltaMap: 庄闲结算（输赢双方对称，零和）
-	// potShare: 底池分配（押注阶段已扣注码，底池全额分给赢家）
+	// deltaMap: 仅庄闲结算（输方→赢方的筹码转移）
 	deltaMap := map[int]int{}
 	if dealerInResults {
 		for _, seatIdx := range e.occupied {
@@ -678,7 +657,7 @@ func (e *nnEngine) settle(r *Room) []Event {
 			}
 		}
 	}
-	// 底池分配给最佳手牌（同分平分）
+	// 底池分配给最佳手牌（同分平分）—— potShare 是已押入底池的真实筹码，全额分配，不受 scale 折扣影响
 	potWinners := []int{}
 	for _, seatIdx := range e.occupied {
 		s := r.Seats[seatIdx]
@@ -689,12 +668,18 @@ func (e *nnEngine) settle(r *Room) []Event {
 			potWinners = append(potWinners, seatIdx)
 		}
 	}
-	share := 0
+	potShare := map[int]int{}
 	if len(potWinners) > 0 {
-		share = e.pot / len(potWinners)
+		share := e.pot / len(potWinners)
+		remainder := e.pot % len(potWinners)
+		for i, w := range potWinners {
+			potShare[w] = share
+			if i < remainder {
+				potShare[w]++ // 余数依次分配给前几位，确保筹码守恒
+			}
+		}
 	}
-	// 守恒结算：仅对庄闲结算部分（deltaMap）应用筹码不足折扣
-	// 底池 share 全额发放（押注阶段已扣，不存在赔付不起）
+	// 守恒结算：输方实际赔付不超过其筹码余额；若不足，按比例缩减赢方收益（仅作用于庄闲结算，不含底池）
 	losersCap := 0
 	winnersGain := 0
 	for _, seatIdx := range e.occupied {
@@ -716,29 +701,20 @@ func (e *nnEngine) settle(r *Room) []Event {
 	results := []ActionData{}
 	for _, seatIdx := range e.occupied {
 		s := r.Seats[seatIdx]
-		settleGain := deltaMap[seatIdx] // 庄闲结算部分
-		if settleGain < 0 {
+		// 庄闲结算部分（受 scale 折扣）
+		gain := deltaMap[seatIdx]
+		if gain < 0 {
 			// 输方赔付不超过自身筹码
-			loss := -settleGain
+			loss := -gain
 			if s.Chips < loss {
 				loss = s.Chips
 			}
-			settleGain = -loss
-		} else if settleGain > 0 && scale < 1.0 {
-			settleGain = int(float64(settleGain) * scale)
+			gain = -loss
+		} else if gain > 0 && scale < 1.0 {
+			gain = int(float64(gain) * scale)
 		}
-		// 总收益 = 庄闲结算（已折扣）+ 底池 share（全额）
-		isPotWinner := false
-		for _, w := range potWinners {
-			if w == seatIdx {
-				isPotWinner = true
-				break
-			}
-		}
-		gain := settleGain
-		if isPotWinner {
-			gain += share
-		}
+		// 底池收益全额发放（不受 scale 影响）
+		gain += potShare[seatIdx]
 		s.Chips += gain
 		// SettledDelta 为本局总盈亏 = 收益 - 自己已下的注（注码已在押注阶段扣除）
 		s.SettledDelta = gain - s.CurrentBet
@@ -780,4 +756,26 @@ func (e *nnEngine) PublicArea(r *Room) PublicAreaView {
 		v.CurrentSeat = e.occupied[e.currentSeat]
 	}
 	return v
+}
+
+// ResendTurn 重连后补发当前轮次信息
+func (e *nnEngine) ResendTurn(r *Room, c *Client) {
+	if e.phase == "betting" {
+		ev := e.turnEvent(r)
+		c.sendMsg(Message{Type: ev.Type, Data: ev.Data})
+		return
+	}
+	if e.phase == "setNiu" {
+		// 凑牛阶段：若该玩家未弃牌且未确认凑牛，补发 turn
+		seat := r.findSeat(c.playerID)
+		if seat < 0 || r.Seats[seat].IsFolded {
+			return
+		}
+		if _, done := e.results[seat]; done {
+			return
+		}
+		c.sendMsg(Message{Type: "turn", Data: ActionData{
+			"seat": seat, "phase": "setNiu", "actions": []string{"niuniuSet"},
+		}})
+	}
 }

@@ -134,14 +134,13 @@ export const useGameStore = defineStore('game', () => {
           const msg: ServerMessage = JSON.parse(ev.data)
           handle(msg)
         } catch (e) {
-          // 解析失败不应静默，便于排查服务端异常消息
           console.error('[WS] 消息解析失败:', ev.data, e)
         }
       }
       ws.onerror = () => {
         connecting.value = false
         if (!isReconnect) showError('网络连接异常')
-        // onerror 后通常会跟 onclose，但若仅 onerror 不 reject，promise 会挂起至超时
+        // 立即 reject，避免 connectPromise 挂起直到超时
         if (!settled) {
           settled = true
           reject(new Error('WebSocket 连接错误'))
@@ -188,7 +187,7 @@ export const useGameStore = defineStore('game', () => {
   }
 
   function joinRoom(code: string) {
-    // 已加入同一房间则不重复发送（避免 HomePage 与 RoomPage 重复 joinRoom）
+    // 去重：已加入同一房间且连接正常时不重复发送 joinRoom
     if (joinedCode === code && socket && socket.readyState === WebSocket.OPEN) return
     // 记录已加入的房间号，断线重连时自动重新加入
     joinedCode = code
@@ -237,18 +236,18 @@ export const useGameStore = defineStore('game', () => {
           const looked = d.lookedIndices as boolean[]
           myHand.value = cards.map((c, i) => looked[i] ? c : { suit: '', rank: '?', value: 0 })
         } else {
-          // 普通模式：仅当手牌内容变化时才替换，避免 broadcastState 重复下发相同手牌
-          // 导致 MyHand 的 watch 误清空选中（NN 凑牛阶段尤为关键）
-          const incoming = (d.cards as Card[]) || []
-          if (!cardsEqual(myHand.value, incoming)) {
-            myHand.value = incoming
-          }
+          myHand.value = d.cards || []
         }
         break
       case 'turn':
         turn.value = d
         break
       case 'phase':
+        // 新对局开始（phase 变为非 settled）时清除上一局的结算/亮牌浮层
+        if (d.phase && d.phase !== 'settled') {
+          settle.value = null
+          reveal.value = null
+        }
         if (d.message) {
           phaseMsg.value = d.message
           pushLog(d.message, d.phase || 'info')
@@ -285,15 +284,6 @@ export const useGameStore = defineStore('game', () => {
     return s ? s.name : `座位${seat}`
   }
 
-  // 比较两组手牌内容是否相同（顺序敏感），用于避免重复 deal 清空选中
-  function cardsEqual(a: Card[], b: Card[]): boolean {
-    if (a.length !== b.length) return false
-    for (let i = 0; i < a.length; i++) {
-      if (a[i].suit !== b[i].suit || a[i].rank !== b[i].rank || a[i].value !== b[i].value) return false
-    }
-    return true
-  }
-
   function clearReveal() {
     reveal.value = null
   }
@@ -313,9 +303,8 @@ export const useGameStore = defineStore('game', () => {
     failed.value = false
     connecting.value = false
     reconnectAttempts = 0
-    // 清理错误提示，避免旧房间错误残留到新房间/首页
-    errorToast.value = ''
     if (errorTimer) { clearTimeout(errorTimer); errorTimer = null }
+    errorToast.value = ''
     room.value = null
     myHand.value = []
     chat.value = []
@@ -327,8 +316,8 @@ export const useGameStore = defineStore('game', () => {
   }
 
   function leaveRoom() {
-    // 仅跳转路由，由路由守卫统一负责 send('leave') + cleanupRoom
-    // 避免在此处与路由守卫重复发送 leave
+    // 仅发 leave 通知服务端，由路由守卫统一 cleanupRoom（避免重复清理）
+    send('leave', {})
     router.push('/')
   }
 

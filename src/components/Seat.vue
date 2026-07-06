@@ -7,7 +7,6 @@ const props = defineProps<{
   seat: SeatView
   isCurrent: boolean
   isMe: boolean
-  position: 'top' | 'left' | 'right' | 'bottom'
   compact?: boolean
 }>()
 
@@ -72,7 +71,7 @@ function renameSeat() {
 </script>
 
 <template>
-  <div class="seat" :class="[position, { current: isCurrent, me: isMe, empty }]">
+  <div class="seat" :class="{ current: isCurrent, me: isMe, empty }">
     <div class="avatar-wrap">
       <div class="avatar" v-if="!empty">{{ seat.avatar }}</div>
       <div class="avatar placeholder" v-else>+</div>
@@ -89,7 +88,7 @@ function renameSeat() {
         </span>
         <span class="badge looked" v-if="seat.isLooked && !seat.isFolded && !seat.offline">看牌</span>
         <span class="badge revealed" v-if="seat.isRevealed">已开牌</span>
-        <span class="badge looking" v-if="seat.lookedIndices && !seat.isRevealed && !seat.isFolded">
+        <span class="badge looking" v-if="seat.lookedIndices && !seat.isRevealed && !seat.isFolded && !seat.isLooked">
           看{{ seat.lookedIndices.filter(Boolean).length }}/{{ seat.lookedIndices.length }}
         </span>
       </div>
@@ -99,7 +98,7 @@ function renameSeat() {
         <span class="bet" v-if="seat.currentBet">注 {{ seat.currentBet }}</span>
         <span class="ready" v-if="seat.ready">✓ 已准备</span>
       </div>
-      <div class="niu" v-if="seat.hasNiu">{{ seat.niuName || '有牛' }}</div>
+      <div class="niu" v-if="seat.hasNiu">牛 {{ seat.niuValue === 0 ? '没' : (seat.niuValue === 10 ? '牛' : seat.niuValue) }}</div>
     </div>
     <div class="info empty-info" v-else>
       <span class="empty-text">空位</span>

@@ -28,7 +28,6 @@ type Seat struct {
 	CurrentBet    int
 	HasNiu        bool
 	NiuValue      int
-	NiuName       string // 牛型名称（五小牛/炸弹牛/五花牛/牛牛/牛N/没牛），前端直接展示
 	NiuCards      []Card // 凑牛的 3 张
 	SettledDelta  int
 	LookedIndices []bool // 蒙牌模式下已查看的牌索引
@@ -68,6 +67,8 @@ type GameEngine interface {
 	PlayerHand(s *Seat) []Card
 	// OnSeatVacated 当座位被腾空（踢人/超时）时调用，引擎推进回合或结算
 	OnSeatVacated(r *Room, seat int) []Event
+	// ResendTurn 重发当前轮次信息给重连的玩家（调用方需持有 r.mu）
+	ResendTurn(r *Room, c *Client)
 }
 
 // Room 一个游戏房间
@@ -193,7 +194,6 @@ func (r *Room) viewFor(c *Client) RoomStateView {
 			CurrentBet:   s.CurrentBet,
 			HasNiu:       s.HasNiu,
 			NiuValue:     s.NiuValue,
-			NiuName:      s.NiuName,
 			SettledDelta: s.SettledDelta,
 			IsRevealed:   s.IsRevealed,
 		}
@@ -268,9 +268,9 @@ func (r *Room) handleDisconnect(c *Client) {
 			break
 		}
 	}
-	// 快照 phase，避免 Unlock 后并发读取 r.Phase 产生 data race
-	phase := r.Phase
 	r.broadcastStateAsync()
+	// 快照 phase，避免 Unlock 后读取 r.Phase 产生数据竞争
+	phase := r.Phase
 	r.mu.Unlock()
 	// 仅当该连接确实在房间内时才提示（避免僵尸连接替换后误报）
 	if found && leaveName != "" {
@@ -284,27 +284,21 @@ func (r *Room) handleDisconnect(c *Client) {
 
 // cleanupOfflineSeatsLocked 释放已超时的掉线座位（懒清理，调用方需持有 r.mu）
 func (r *Room) cleanupOfflineSeatsLocked() {
-	hostVacated := false
 	for _, s := range r.Seats {
 		if s.isOffline() && time.Since(s.DisconnectedAt) > offlineTimeout {
 			name := s.Name
 			seatIdx := s.Index
-			wasHost := s.PlayerID == r.HostID
 			r.standLocked(seatIdx)
 			r.systemChat(name + " 掉线超时，座位已释放")
 			// 对局中腾空座位：通知引擎推进回合或结算
 			if r.Phase == "playing" {
 				r.emitEvents(r.Engine.OnSeatVacated(r, seatIdx))
 			}
-			if wasHost {
-				hostVacated = true
+			// 对局可能因腾空而结束：确保房主有效
+			if r.Phase == "settled" {
+				r.ensureHostLocked()
 			}
 		}
-	}
-	// 仅当房主座位因超时被腾空且对局已结束时，才转移房主权
-	// （不影响房主作为旁观者未入座的正常场景）
-	if hostVacated && r.Phase != "playing" {
-		r.transferHostLocked()
 	}
 }
 
@@ -332,6 +326,9 @@ func (r *Room) handleLeave(c *Client) {
 	var evs []Event
 	if vacatedSeat >= 0 && r.Phase == "playing" {
 		evs = r.Engine.OnSeatVacated(r, vacatedSeat)
+	}
+	if r.Phase == "settled" {
+		r.ensureHostLocked()
 	}
 	r.mu.Unlock()
 	if leaveName != "" {
@@ -368,6 +365,9 @@ func (r *Room) handleKick(c *Client, data ActionData) {
 	var evs []Event
 	if r.Phase == "playing" {
 		evs = r.Engine.OnSeatVacated(r, seatNum)
+	}
+	if r.Phase == "settled" {
+		r.ensureHostLocked()
 	}
 	r.mu.Unlock()
 	r.systemChat("房主踢出了掉线的 " + kickName)
@@ -476,6 +476,10 @@ func (r *Room) applyAction(c *Client, action string, data ActionData) {
 		return
 	}
 	evs := r.Engine.HandleAction(r, seat, action, data)
+	// 对局结束（房主可能已掉线/离场）：在锁内确保房主有效，避免房间无人可开局
+	if r.Phase == "settled" {
+		r.ensureHostLocked()
+	}
 	r.mu.Unlock()
 	r.emitEvents(evs)
 	r.broadcastState()
@@ -496,20 +500,19 @@ func (r *Room) standLocked(seat int) {
 	s.CurrentBet = 0
 	s.HasNiu = false
 	s.NiuValue = 0
-	s.NiuName = ""
 	s.NiuCards = nil
 	s.SettledDelta = 0
 	s.LookedIndices = nil
 	s.IsRevealed = false
 	s.DisconnectedAt = time.Time{}
 	s.Chips = startChips // 重置筹码，避免新入座者继承前任筹码
-	// 房主离开：在 waiting/settled 阶段将房主转移给最早入座的在线玩家，避免房间无法继续操作
+	// 房主离开（非对局中）时自动转移房主给最早的在座玩家
 	if wasHost && (r.Phase == "waiting" || r.Phase == "settled") {
 		r.transferHostLocked()
 	}
 }
 
-// transferHostLocked 将房主权转移给最早入座的在线玩家（调用方需持有 r.mu）
+// transferHostLocked 将房主转移给最早入座的玩家（调用方需持有 r.mu）
 func (r *Room) transferHostLocked() {
 	for _, s := range r.Seats {
 		if s.occupied() && s.PlayerID != "" {
@@ -517,13 +520,42 @@ func (r *Room) transferHostLocked() {
 			return
 		}
 	}
-	// 无人可转移时保留原 HostID（房间将等 reaper 回收）
+}
+
+// ensureHostLocked 确保房主仍在线（在座或旁观）；若房主已离线/离场则转移给最早在线在座玩家。
+// 用于对局结束（phase→settled）时修复"房主在对局中掉线/离场后房间无人可开局"的死锁。
+// 调用方需持有 r.mu。
+func (r *Room) ensureHostLocked() {
+	// 房主仍在线在座
+	for _, s := range r.Seats {
+		if s.PlayerID == r.HostID && s.occupied() {
+			return
+		}
+	}
+	// 房主仍在线旁观
+	for _, sp := range r.Spectators {
+		if sp.playerID == r.HostID {
+			return
+		}
+	}
+	// 房主已离线/离场，转移给最早在线在座玩家
+	for _, s := range r.Seats {
+		if s.occupied() {
+			r.HostID = s.PlayerID
+			return
+		}
+	}
 }
 
 func (r *Room) handleSit(c *Client, data ActionData) {
 	r.mu.Lock()
 	// 已在座则换座（仅等待阶段）
 	cur := r.findSeat(c.playerID)
+	if cur >= 0 && r.Phase == "playing" {
+		// 对局中已在座：保持原座位，忽略重复 sit 请求
+		r.mu.Unlock()
+		return
+	}
 	if cur >= 0 && r.Phase != "playing" {
 		r.standLocked(cur)
 	}
@@ -559,6 +591,12 @@ func (r *Room) handleSit(c *Client, data ActionData) {
 		return
 	}
 	s := r.Seats[seat]
+	// 对局中仅允许接管掉线座位（继承手牌）；禁止新入座空座位（无手牌无法参与本局）
+	if r.Phase == "playing" && !s.isOffline() {
+		r.mu.Unlock()
+		c.emitError("对局进行中，请等待本局结束后入座")
+		return
+	}
 	inheritHand := r.Phase == "playing" && len(s.Hand) > 0 && s.isOffline()
 	s.Client = c
 	s.PlayerID = c.playerID
@@ -582,6 +620,8 @@ func (r *Room) handleSit(c *Client, data ActionData) {
 		if r.BlindMode && s.LookedIndices != nil {
 			inheritLooked = append([]bool{}, s.LookedIndices...)
 		}
+		// 继承掉线座位：补发当前轮次信息（与 tryReclaim 保持一致）
+		r.Engine.ResendTurn(r, c)
 	}
 	r.mu.Unlock()
 	if inheritHand {
@@ -703,10 +743,15 @@ func (r *Room) handleStart(c *Client, data ActionData) {
 		c.emitError("入座且准备的人数不足")
 		return
 	}
-	// 房主可在开局数据中指定蒙牌模式（仅炸金花生效）；
-	// 未传 blindMode 字段时保留 r.BlindMode 现有值（避免覆盖 setBlindMode 已设置的开关）
-	if v, ok := data["blindMode"].(bool); ok && r.Game == "zjh" {
-		r.BlindMode = v
+	// 房主可在开局数据中指定蒙牌模式（仅炸金花生效）
+	if r.Game == "zjh" {
+		if v, ok := data["blindMode"].(bool); ok {
+			r.BlindMode = v
+		} else {
+			r.BlindMode = false
+		}
+	} else {
+		r.BlindMode = false
 	}
 	// 重置座位对局状态
 	for _, s := range r.Seats {
@@ -721,7 +766,6 @@ func (r *Room) handleStart(c *Client, data ActionData) {
 		s.CurrentBet = 0
 		s.HasNiu = false
 		s.NiuValue = 0
-		s.NiuName = ""
 		s.NiuCards = nil
 		s.SettledDelta = 0
 		s.LookedIndices = nil
@@ -750,6 +794,8 @@ func (r *Room) tryReclaim(c *Client) bool {
 			// 掉线座位夺回
 			s.Client = c
 			s.DisconnectedAt = time.Time{}
+			// 重连后补发当前轮次信息，使玩家能立即看到可用操作
+			r.Engine.ResendTurn(r, c)
 			return true
 		}
 		if s.Client != c {
@@ -757,6 +803,7 @@ func (r *Room) tryReclaim(c *Client) bool {
 			// 旧连接的 readPump 终止时会触发 unregister→handleDisconnect，但找不到该 client 已不处理
 			s.Client = c
 			s.DisconnectedAt = time.Time{}
+			r.Engine.ResendTurn(r, c)
 			return true
 		}
 	}

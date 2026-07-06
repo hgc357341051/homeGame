@@ -47,6 +47,10 @@ func (rm *RoomManager) reaper() {
 						seatIdx := s.Index
 						room.standLocked(seatIdx)
 						evs := room.Engine.OnSeatVacated(room, seatIdx)
+						// 对局可能因腾空而结束：确保房主有效
+						if room.Phase == "settled" {
+							room.ensureHostLocked()
+						}
 						pa.sysMsg = name + " 掉线超时，座位已释放"
 						pa.evs = evs
 						pa.needBcast = true
@@ -172,8 +176,8 @@ func (rm *RoomManager) handleAction(c *Client, action string, data ActionData) {
 				c.playerID = pid
 				c.hub.clients[pid] = c
 				c.hub.mu.Unlock()
-				// 锁外关闭旧连接，触发其 readPump 退出 → unregister
-				// Hub.run 处理 unregister 时 existing != old 不会误删新连接
+				// 关闭旧连接，触发其 readPump 退出 → unregister
+				// unregister 中 existing==c 检查会失败，不会误删新连接
 				old.conn.Close()
 			} else {
 				delete(c.hub.clients, c.playerID)

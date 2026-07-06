@@ -19,6 +19,8 @@ const copied = ref(false)
 const revealVisible = ref(false)
 const isMobile = ref(false)
 let revealTimer: any = null
+let resizeTimer: any = null
+let joinCancelled = false
 
 const room = computed(() => store.room)
 const phase = computed(() => room.value?.phase)
@@ -57,6 +59,12 @@ function checkMobile() {
   isMobile.value = window.innerWidth < 900
 }
 
+// resize 防抖：避免拖拽窗口时频繁触发 reflow
+function onResize() {
+  if (resizeTimer) clearTimeout(resizeTimer)
+  resizeTimer = setTimeout(checkMobile, 150)
+}
+
 function seatAngle(seatIndex: number): number {
   const N = maxPlayers.value || 1
   if (mySeat.value >= 0) {
@@ -78,14 +86,6 @@ function seatStyle(seatIndex: number): Record<string, string> {
     top: `${y}%`,
     transform: 'translate(-50%, -50%)',
   }
-}
-
-function seatPosition(seatIndex: number): 'top' | 'left' | 'right' | 'bottom' {
-  const a = seatAngle(seatIndex)
-  if (a < 45 || a >= 315) return 'top'
-  if (a < 135) return 'right'
-  if (a < 225) return 'bottom'
-  return 'left'
 }
 
 function onCardsChange(cards: Card[]) {
@@ -117,18 +117,19 @@ watch(
       revealTimer = setTimeout(() => {
         revealVisible.value = false
       }, 3200)
+    } else {
+      // store.reveal 被清除时立即隐藏浮层
+      revealVisible.value = false
+      if (revealTimer) clearTimeout(revealTimer)
     }
   },
 )
-
-// 取消标志：快速切换路由时阻止旧 joinRoom 的 await 续行
-let joinCancelled = false
 
 async function joinRoom() {
   joinCancelled = false
   try {
     await store.connect()
-    // await 期间若已离开页面（路由切换），不再发送 joinRoom，避免残留旧房间号
+    // 组件已卸载或已切换房间时不再发送 joinRoom
     if (joinCancelled) return
     store.joinRoom(props.code.toUpperCase())
   } catch {
@@ -143,6 +144,22 @@ function copyCode() {
       copied.value = true
       setTimeout(() => (copied.value = false), 1500)
     })
+  } else {
+    // 非 HTTPS 环境（如局域网 IP 访问）的兜底方案
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.style.position = 'fixed'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.select()
+    try {
+      document.execCommand('copy')
+      copied.value = true
+      setTimeout(() => (copied.value = false), 1500)
+    } catch {
+      /* 忽略 */
+    }
+    document.body.removeChild(ta)
   }
 }
 
@@ -171,11 +188,11 @@ onMounted(() => {
     store.setName('玩家' + Math.random().toString(36).slice(2, 8).toUpperCase())
   }
   checkMobile()
-  window.addEventListener('resize', checkMobile)
+  window.addEventListener('resize', onResize)
   joinRoom()
 })
 
-// 同一组件实例下房间号变化（room/A → room/B 直跳）时重新加入
+// watch code 变化（room/A → room/B 直跳时路由守卫已清理，需重新加入）
 watch(
   () => props.code,
   (newCode, oldCode) => {
@@ -188,7 +205,8 @@ watch(
 onUnmounted(() => {
   joinCancelled = true
   if (revealTimer) clearTimeout(revealTimer)
-  window.removeEventListener('resize', checkMobile)
+  if (resizeTimer) clearTimeout(resizeTimer)
+  window.removeEventListener('resize', onResize)
 })
 </script>
 
@@ -266,8 +284,8 @@ onUnmounted(() => {
                   <!-- 上次出牌 -->
                   <div v-if="lastPlay" class="last-play">
                     <div class="area-label">
-                      <template v-if="lastPlay.pass">{{ seats[lastPlay.seat]?.name }} 不要</template>
-                      <template v-else>{{ seats[lastPlay.seat]?.name }} 出牌</template>
+                      <template v-if="lastPlay.pass">{{ seats[lastPlay.seat]?.name ?? '玩家' }} 不要</template>
+                      <template v-else>{{ seats[lastPlay.seat]?.name ?? '玩家' }} 出牌</template>
                     </div>
                     <div v-if="!lastPlay.pass" class="mini-cards">
                       <PlayingCard
@@ -322,7 +340,6 @@ onUnmounted(() => {
                   :seat="s"
                   :is-current="store.turn?.seat === s.seat && phase === 'playing'"
                   :is-me="s.seat === mySeat"
-                  :position="seatPosition(s.seat)"
                   :compact="isMobile"
                 />
               </div>
@@ -720,7 +737,7 @@ onUnmounted(() => {
 .seat-slot.clickable {
   cursor: pointer;
 }
-.seat-slot.clickable:hover ::v-deep(.seat) {
+.seat-slot.clickable:hover :deep(.seat) {
   border-color: var(--gold);
   box-shadow: 0 0 16px var(--gold-glow);
   transform: translateY(-2px);

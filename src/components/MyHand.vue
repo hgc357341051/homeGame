@@ -21,7 +21,7 @@ watch(
   () => props.cards,
   () => {
     selectedKeys.value.clear()
-    // 同步通知父组件选中已清空，避免 selectedCards 残留旧值
+    // 牌变化时通知父组件选择已清空，避免父组件持有过期选择
     emit('change', [])
   },
 )

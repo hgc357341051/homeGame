@@ -76,12 +76,12 @@ func is235(cards []Card) bool {
 }
 
 func zjhCompare(a, b zjhHand) int {
-	// 特殊规则：235 杀豹子（仅当一方为 235 散牌、另一方为豹子时生效）
+	// 特殊规则：235 散牌杀豹子（仅当一方为 235 且为散牌、另一方为豹子时生效）
 	a235, b235 := is235(a.Cards), is235(b.Cards)
-	if a235 && b.Type == 5 {
+	if a235 && a.Type == 0 && b.Type == 5 {
 		return 1
 	}
-	if b235 && a.Type == 5 {
+	if b235 && b.Type == 0 && a.Type == 5 {
 		return -1
 	}
 	if a.Score > b.Score {
@@ -466,12 +466,12 @@ func (e *zjhEngine) HandleAction(r *Room, seat int, action string, data ActionDa
 func (e *zjhEngine) settleByFold(r *Room) []Event {
 	e.phase = "settled"
 	actives := e.activeSeats(r)
-	// 防御：活跃玩家为空时（全员弃牌/腾空），退还各自已下注码，避免底池凭空消失
+	// 防御：活跃玩家为空时（全员弃牌/腾空），退还各自已下注码，避免底池筹码凭空消失
 	if len(actives) == 0 {
 		results := []ActionData{}
 		for _, seatIdx := range e.occupied {
 			s := r.Seats[seatIdx]
-			// 退还已下注码：chips 加回 CurrentBet，delta 记为 0（不输不赢）
+			// 退还已扣除的注码，本局净盈亏为 0
 			s.Chips += s.CurrentBet
 			s.SettledDelta = 0
 			results = append(results, ActionData{"seat": seatIdx, "name": s.Name, "delta": 0, "chips": s.Chips, "win": false})
@@ -484,7 +484,7 @@ func (e *zjhEngine) settleByFold(r *Room) []Event {
 		}
 		return []Event{
 			{Type: "settle", Data: ActionData{"results": results, "game": "zjh", "winnerSeat": -1, "aborted": true}, Target: -1},
-			{Type: "phase", Data: ActionData{"phase": "settled", "message": "全员离场，本局中止"}, Target: -1},
+			{Type: "phase", Data: ActionData{"phase": "settled", "message": "全员离场，本局中止（注码退还）"}, Target: -1},
 		}
 	}
 	winner := actives[0]
@@ -537,4 +537,13 @@ func (e *zjhEngine) PublicArea(r *Room) PublicAreaView {
 	}
 	v.LookedCount = looked
 	return v
+}
+
+// ResendTurn 重连后补发当前轮次信息
+func (e *zjhEngine) ResendTurn(r *Room, c *Client) {
+	if e.phase != "betting" {
+		return
+	}
+	ev := e.turnEvent(r)
+	c.sendMsg(Message{Type: ev.Type, Data: ev.Data})
 }

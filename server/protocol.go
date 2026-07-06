@@ -44,7 +44,6 @@ type SeatView struct {
 	CurrentBet   int    `json:"currentBet,omitempty"`
 	HasNiu       bool   `json:"hasNiu,omitempty"`
 	NiuValue     int    `json:"niuValue,omitempty"`
-	NiuName      string `json:"niuName,omitempty"`
 	SettledDelta int    `json:"settledDelta,omitempty"`
 	LookedIndices []bool `json:"lookedIndices,omitempty"` // 蒙牌模式：已查看的牌索引
 	IsRevealed   bool   `json:"isRevealed"`               // 蒙牌模式：是否已开牌

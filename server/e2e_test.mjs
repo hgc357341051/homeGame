@@ -14,7 +14,7 @@ function makeClient(name) {
   function send(type, data = {}) {
     ws.send(JSON.stringify({ type, data }))
   }
-  function waitMsg(type, timeout = 5000) {
+  function waitMsg(type, timeout = 2000) {
     const start = Date.now()
     return new Promise((resolve, reject) => {
       function check() {
@@ -29,10 +29,26 @@ function makeClient(name) {
       check()
     })
   }
+  // 等待指定类型且满足 predicate 的消息，跳过历史残留的同类型消息
+  function waitMsgWhere(type, predicate, timeout = 5000) {
+    const start = Date.now()
+    return new Promise((resolve, reject) => {
+      function check() {
+        const idx = inbox.findIndex((m) => m.type === type && predicate(m))
+        if (idx >= 0) {
+          const [found] = inbox.splice(idx, 1)
+          return resolve(found)
+        }
+        if (Date.now() - start > timeout) return reject(new Error('timeout waiting for ' + type))
+        setTimeout(check, 50)
+      }
+      check()
+    })
+  }
   function close() {
     ws.close()
   }
-  return { ws, wsReady, send, waitMsg, inbox, close }
+  return { ws, wsReady, send, waitMsg, waitMsgWhere, inbox, close }
 }
 
 async function main() {
@@ -80,7 +96,6 @@ async function main() {
   console.log('✓ 聊天:', chatMsg.data.player, '-', chatMsg.data.text)
 
   c.close()
-  await new Promise((r) => setTimeout(r, 300))
   console.log('\n--- 测试2: 三玩家 DDZ 开局流程 ---')
   const a = makeClient('玩家甲')
   const b = makeClient('玩家乙')
@@ -165,12 +180,10 @@ async function main() {
     }
     console.log(`✓ ${label} 安全检查通过: 他人手牌未泄露`)
     p1.close(); p2.close()
-    await new Promise((r) => setTimeout(r, 300))
   }
 
   await twoPlayerStart('zjh', '炸金花')
   await twoPlayerStart('nn', '牛牛')
-  await new Promise((r) => setTimeout(r, 300))
 
   // --- 测试: 炸金花 look→compare 比牌流程（验证 look 不再消耗轮次）---
   console.log('\n--- 测试: 炸金花 look→compare 比牌流程 ---')
@@ -195,30 +208,17 @@ async function main() {
   const zDeal1 = await z1.waitMsg('deal')
   if (zDeal1.data.cards?.length !== 3) throw new Error('ZJH 应发3张')
   console.log('✓ 比牌甲收到手牌:', zDeal1.data.cards.length, '张')
-  // 先找到当前轮到的玩家（从 z1 的 turn 事件读取）
+  await z1.waitMsg('phase')
+  // 找到当前轮到的玩家
   const zTurn1 = await z1.waitMsg('turn')
   const turnSeat = zTurn1.data.seat
   const turnClient = turnSeat === 0 ? z1 : z2
+  const otherClient = turnSeat === 0 ? z2 : z1
   console.log('✓ 当前轮到座位', turnSeat)
-  // 清空双方 inbox 中累积的 phase/turn，避免干扰后续 look 事件匹配
-  z1.inbox.length = 0
-  z2.inbox.length = 0
-  // 看牌（不应消耗轮次）
+  // 看牌（不应消耗轮次）。用 waitMsgWhere 跳过 turnClient 残留的开局 phase 事件
   turnClient.send('look')
-  // 精确等待 event=look 的 phase 事件（跳过其他 phase 广播）
-  const lookEv = await new Promise((resolve, reject) => {
-    const start = Date.now()
-    function check() {
-      const idx = turnClient.inbox.findIndex((m) => m.type === 'phase' && m.data.event === 'look')
-      if (idx >= 0) {
-        const [found] = turnClient.inbox.splice(idx, 1)
-        return resolve(found)
-      }
-      if (Date.now() - start > 2000) return reject(new Error('timeout waiting for look event'))
-      setTimeout(check, 50)
-    }
-    check()
-  })
+  const lookEv = await turnClient.waitMsgWhere('phase', (m) => m.data.event === 'look')
+  if (lookEv.data.event !== 'look') throw new Error('应收到 look 事件')
   console.log('✓ 看牌成功，未消耗轮次')
   // 看牌后应能立即 compare（不再报"还没轮到你"）
   turnClient.send('compare', { target: turnSeat === 0 ? 1 : 0 })

@@ -61,7 +61,7 @@ const coins = Array.from({ length: 18 }, (_, i) => ({
               {{ winnerName }} 获胜
             </template>
           </div>
-          <div class="sub">{{ data?.aborted ? '玩家离场，本局未分胜负' : (isWin ? '恭喜你赢得本局' : '再接再厉') }}</div>
+          <div class="sub">{{ data?.aborted ? '全员离场，注码退还' : (isWin ? '恭喜你赢得本局' : '再接再厉') }}</div>
         </div>
 
         <div class="results">

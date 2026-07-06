@@ -21,20 +21,27 @@ function sendQuick(q: string) {
 const items = computed(() => {
   // 合并聊天与事件日志，按统一时间戳排序展示
   const chatItems = store.chat.map((c) => ({
-    kind: c.system ? ('system' as const) : ('chat' as const),
+    id: `c${c.ts}`, kind: c.system ? ('system' as const) : ('chat' as const),
     ts: c.ts, player: c.player, text: c.text
   }))
   // log 项使用存储的时间戳（与 chat 同为 Date.now() 量级），保证正确交错
-  const logItems = store.log.map((l) => ({ kind: 'log' as const, ts: l.ts, player: '', text: l.text }))
+  const logItems = store.log.map((l) => ({ id: `l${l.id}`, kind: 'log' as const, ts: l.ts, player: '', text: l.text }))
   return [...chatItems, ...logItems].sort((a, b) => a.ts - b.ts)
 })
 
 watch(
-  () => items.value.length,
+  () => items.value,
   async () => {
     await nextTick()
-    if (listRef.value) listRef.value.scrollTop = listRef.value.scrollHeight
+    if (listRef.value) {
+      // 仅当用户已滚动到底部附近时才自动滚动，避免打断阅读历史消息
+      const nearBottom = listRef.value.scrollHeight - listRef.value.scrollTop - listRef.value.clientHeight < 80
+      if (nearBottom) {
+        listRef.value.scrollTop = listRef.value.scrollHeight
+      }
+    }
   },
+  { deep: false },
 )
 </script>
 
@@ -44,7 +51,7 @@ watch(
       <span>消息 / 牌局动态</span>
     </div>
     <div class="list" ref="listRef">
-      <div v-for="(it, i) in items" :key="i" class="item" :class="it.kind">
+      <div v-for="it in items" :key="it.id" class="item" :class="it.kind">
         <template v-if="it.kind === 'chat'">
           <span class="who">{{ it.player }}</span>
           <span class="msg">{{ it.text }}</span>

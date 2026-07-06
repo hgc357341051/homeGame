@@ -17,7 +17,7 @@ onMounted(() => {
 
   <!-- 全局错误提示 -->
   <transition name="toast">
-    <div v-if="store.errorToast" class="error-toast">
+    <div v-if="store.errorToast" class="error-toast" role="alert" aria-live="assertive">
       <span>⚠</span> {{ store.errorToast }}
     </div>
   </transition>

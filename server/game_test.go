@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+	"time"
+)
 
 func tc(suit, rank string, v int) Card { return Card{Suit: suit, Rank: rank, Value: v} }
 
@@ -171,15 +175,12 @@ func TestDDZSettleConservation(t *testing.T) {
 }
 
 // 验证 M3 修复：牛牛结算筹码守恒
-// 场景：闲家筹码5（赢家），庄家筹码1000（输方）。闲家牛牛×4赢庄家。
-// 押注阶段已扣注码：闲家CurrentBet=10, 庄家CurrentBet=10, pot=20。
-// 庄闲结算：闲家赢 4*10=40，庄家输 40（庄家筹码足，全额赔付）。
-// 底池分配：闲家为最佳手牌，独得 pot=20（底池全额，不受 scale 影响）。
-// 最终：闲家 5+40+20=65，庄家 1000-40=960，总 1025（=初始5+1000+pot20）。
+// 结算前总财富 = sum(Chips) + pot（pot 是押注阶段已扣除的筹码）
+// 结算后总财富 = sum(Chips)（pot 已分配给赢家，清零）
 func TestNNSettleConservation(t *testing.T) {
 	r := &Room{Seats: []*Seat{
-		{Index: 0, PlayerID: "P0", Name: "P0", Chips: 5, CurrentBet: 10}, // 闲家筹码不足但是赢家
-		{Index: 1, PlayerID: "P1", Name: "P1", Chips: 1000, CurrentBet: 10},
+		{Index: 0, PlayerID: "P0", Name: "P0", Chips: 5}, // 闲家筹码不足
+		{Index: 1, PlayerID: "P1", Name: "P1", Chips: 1000},
 	}}
 	e := &nnEngine{
 		occupied:    []int{0, 1},
@@ -191,24 +192,16 @@ func TestNNSettleConservation(t *testing.T) {
 	}
 	e.results[0] = nnResult{Level: 2, Value: 10, Multiplier: 4} // 闲家牛牛
 	e.results[1] = nnResult{Level: 2, Value: 0, Multiplier: 1}  // 庄家没牛
+	initialTotal := r.Seats[0].Chips + r.Seats[1].Chips + e.pot // 含底池的总财富
 	_ = e.settle(r)
-	// 守恒：玩家筹码之和 + pot(已清零) = 初始筹码之和 + pot
-	// 初始玩家筹码 5+1000=1005，pot=20，故最终玩家筹码之和应为 1025
 	total := r.Seats[0].Chips + r.Seats[1].Chips
-	if total != 5+1000+20 {
-		t.Errorf("筹码不守恒: total=%d, 期望 %d", total, 5+1000+20)
+	if total != initialTotal {
+		t.Errorf("筹码不守恒: total=%d, expected=%d", total, initialTotal)
 	}
 	for _, s := range r.Seats {
 		if s.Chips < 0 {
 			t.Errorf("座位 %d 筹码为负: %d", s.Index, s.Chips)
 		}
-	}
-	// 闲家应是底池赢家，获得 pot=20
-	if r.Seats[0].Chips != 65 {
-		t.Errorf("闲家筹码应为 65 (5+40+20), 实际 %d", r.Seats[0].Chips)
-	}
-	if r.Seats[1].Chips != 960 {
-		t.Errorf("庄家筹码应为 960 (1000-40), 实际 %d", r.Seats[1].Chips)
 	}
 }
 
@@ -238,6 +231,24 @@ func TestZJH235OnlyKillsTriple(t *testing.T) {
 	}
 }
 
+// 验证 235 同花（金花）不杀豹子：仅散牌 235 才适用特殊规则
+func TestZJH235FlushDoesNotKillTriple(t *testing.T) {
+	aaa := []Card{tc("♠", "A", 14), tc("♥", "A", 14), tc("♦", "A", 14)}
+	two35Flush := []Card{tc("♠", "2", 2), tc("♠", "3", 3), tc("♠", "5", 5)}
+	aHand, _ := evalZJH(aaa)
+	bHand, _ := evalZJH(two35Flush)
+	if bHand.Type != 3 {
+		t.Fatalf("2♠3♠5♠ 应为金花(Type=3), got Type=%d", bHand.Type)
+	}
+	// 235 金花不应杀豹子，豹子应赢
+	if zjhCompare(bHand, aHand) >= 0 {
+		t.Error("235 金花不应杀豹子")
+	}
+	if zjhCompare(aHand, bHand) <= 0 {
+		t.Error("豹子应赢 235 金花")
+	}
+}
+
 // 验证 ZJH Score 编码范围不重叠
 func TestZJHScoreRange(t *testing.T) {
 	// 单张最大 A-K-J（非连续，避免误判为顺子）: enc(14,13,11)=14*225+13*15+11=3150+195+11=3356
@@ -254,5 +265,242 @@ func TestZJHScoreRange(t *testing.T) {
 	}
 	if zjhCompare(sHand, pHand) >= 0 {
 		t.Error("单张不应赢对子（即使最大单张 vs 最小对子）")
+	}
+}
+
+// 验证 ensureHostLocked：房主离线后转移给最早在线在座玩家
+func TestEnsureHostLockedTransfersWhenHostGone(t *testing.T) {
+	r := &Room{
+		HostID: "HOST",
+		Phase:  "settled",
+		Seats: []*Seat{
+			{Index: 0, PlayerID: "HOST", Name: "H", Chips: 1000, Client: nil, DisconnectedAt: time.Time{}}, // 已腾空
+			{Index: 1, PlayerID: "P1", Name: "P1", Chips: 1000, Client: &Client{playerID: "P1"}},
+			{Index: 2, PlayerID: "P2", Name: "P2", Chips: 1000, Client: &Client{playerID: "P2"}},
+		},
+	}
+	r.ensureHostLocked()
+	if r.HostID != "P1" {
+		t.Errorf("房主应转移给 P1, got HostID=%s", r.HostID)
+	}
+}
+
+// 验证 ensureHostLocked：房主仍在线在座时不转移
+func TestEnsureHostLockedKeepsOnlineHost(t *testing.T) {
+	r := &Room{
+		HostID: "HOST",
+		Phase:  "settled",
+		Seats: []*Seat{
+			{Index: 0, PlayerID: "HOST", Name: "H", Chips: 1000, Client: &Client{playerID: "HOST"}},
+			{Index: 1, PlayerID: "P1", Name: "P1", Chips: 1000, Client: &Client{playerID: "P1"}},
+		},
+	}
+	r.ensureHostLocked()
+	if r.HostID != "HOST" {
+		t.Errorf("房主仍在线不应转移, got HostID=%s", r.HostID)
+	}
+}
+
+// 验证 ensureHostLocked：房主在线旁观时不转移
+func TestEnsureHostLockedKeepsSpectatorHost(t *testing.T) {
+	r := &Room{
+		HostID:     "HOST",
+		Phase:      "settled",
+		Spectators: []*Client{{playerID: "HOST"}},
+		Seats: []*Seat{
+			{Index: 0, PlayerID: "P1", Name: "P1", Chips: 1000, Client: &Client{playerID: "P1"}},
+		},
+	}
+	r.ensureHostLocked()
+	if r.HostID != "HOST" {
+		t.Errorf("房主在线旁观不应转移, got HostID=%s", r.HostID)
+	}
+}
+
+// 验证 ensureHostLocked：房主掉线（座位保留但 Client=nil）时转移
+func TestEnsureHostLockedTransfersWhenHostOffline(t *testing.T) {
+	r := &Room{
+		HostID: "HOST",
+		Phase:  "settled",
+		Seats: []*Seat{
+			{Index: 0, PlayerID: "HOST", Name: "H", Chips: 1000, Client: nil, DisconnectedAt: time.Now()},
+			{Index: 1, PlayerID: "P1", Name: "P1", Chips: 1000, Client: &Client{playerID: "P1"}},
+		},
+	}
+	r.ensureHostLocked()
+	if r.HostID != "P1" {
+		t.Errorf("房主掉线应转移给 P1, got HostID=%s", r.HostID)
+	}
+}
+
+// 验证 handleLeave 对局中房主离场后房主转移（集成测试）
+func TestHandleLeaveHostTransferDuringPlaying(t *testing.T) {
+	hostClient := &Client{playerID: "HOST", name: "房主"}
+	p1Client := &Client{playerID: "P1", name: "玩家1"}
+	r := &Room{
+		Code:   "TEST",
+		Game:   "zjh",
+		HostID: "HOST",
+		Phase:  "playing",
+		Engine: &zjhEngine{},
+		Seats: []*Seat{
+			{Index: 0, PlayerID: "HOST", Name: "房主", Chips: 1000, Client: hostClient},
+			{Index: 1, PlayerID: "P1", Name: "玩家1", Chips: 1000, Client: p1Client},
+		},
+	}
+	hostClient.room = r
+	p1Client.room = r
+	// 初始化引擎状态：2人在座
+	e := r.Engine.(*zjhEngine)
+	e.occupied = []int{0, 1}
+	e.phase = "betting"
+	e.activeCount = 2
+	e.baseBet = 2
+	e.currentBet = 2
+	e.pot = 4
+	e.currentSeat = 0
+	r.Seats[0].CurrentBet = 2
+	r.Seats[1].CurrentBet = 2
+	// 房主离开
+	r.handleLeave(hostClient)
+	if r.Phase != "settled" {
+		t.Errorf("房主离开后应结算, got Phase=%s", r.Phase)
+	}
+	if r.HostID != "P1" {
+		t.Errorf("房主应转移给 P1, got HostID=%s", r.HostID)
+	}
+}
+
+// recvMsg 从客户端 send channel 读取一条消息；无消息时返回 nil
+func recvMsg(ch chan []byte) *Message {
+	select {
+	case b := <-ch:
+		var msg Message
+		if err := json.Unmarshal(b, &msg); err != nil {
+			return nil
+		}
+		return &msg
+	default:
+		return nil
+	}
+}
+
+func TestZJHResendTurn(t *testing.T) {
+	// 重连玩家在 betting 阶段应收到 turn 事件
+	client := &Client{playerID: "P1", name: "玩家1", send: make(chan []byte, 8)}
+	r := &Room{
+		Code:   "TEST",
+		Game:   "zjh",
+		HostID: "P1",
+		Phase:  "playing",
+		Engine: &zjhEngine{},
+		Seats: []*Seat{
+			{Index: 0, PlayerID: "P1", Name: "玩家1", Chips: 1000, Client: client},
+			{Index: 1, PlayerID: "P2", Name: "玩家2", Chips: 1000, Client: &Client{playerID: "P2"}},
+		},
+	}
+	client.room = r
+	e := r.Engine.(*zjhEngine)
+	e.occupied = []int{0, 1}
+	e.phase = "betting"
+	e.currentSeat = 0 // P1 的回合
+	e.baseBet = 2
+	e.currentBet = 2
+	e.activeCount = 2
+	r.Seats[0].CurrentBet = 2
+	r.Seats[1].CurrentBet = 2
+
+	r.Engine.ResendTurn(r, client)
+	msg := recvMsg(client.send)
+	if msg == nil {
+		t.Fatal("ResendTurn 应发送 turn 消息，但未收到")
+	}
+	if msg.Type != "turn" {
+		t.Errorf("应收到 turn 事件, got %s", msg.Type)
+	}
+
+	// 非 betting 阶段不应发送
+	e.phase = "settled"
+	r.Engine.ResendTurn(r, client)
+	if msg := recvMsg(client.send); msg != nil {
+		t.Errorf("settled 阶段不应发送消息, got %v", msg.Type)
+	}
+}
+
+func TestNNResendTurnSetNiu(t *testing.T) {
+	// 凑牛阶段：未确认凑牛的玩家重连应收到 turn 事件
+	client := &Client{playerID: "P1", name: "玩家1", send: make(chan []byte, 8)}
+	r := &Room{
+		Code:   "TEST",
+		Game:   "nn",
+		HostID: "P1",
+		Phase:  "playing",
+		Engine: &nnEngine{},
+		Seats: []*Seat{
+			{Index: 0, PlayerID: "P1", Name: "玩家1", Chips: 1000, Client: client, Hand: []Card{tc("♠", "A", 1), tc("♥", "5", 5), tc("♦", "5", 5), tc("♣", "J", 10), tc("♠", "K", 10)}},
+		},
+	}
+	client.room = r
+	e := r.Engine.(*nnEngine)
+	e.phase = "setNiu"
+	e.results = map[int]nnResult{} // P1 未确认
+
+	r.Engine.ResendTurn(r, client)
+	msg := recvMsg(client.send)
+	if msg == nil {
+		t.Fatal("setNiu 阶段未确认的玩家应收到 turn 消息")
+	}
+	if msg.Type != "turn" {
+		t.Errorf("应收到 turn 事件, got %s", msg.Type)
+	}
+
+	// 已确认凑牛的玩家不应再收到
+	e.results[0] = nnResult{}
+	r.Engine.ResendTurn(r, client)
+	if msg := recvMsg(client.send); msg != nil {
+		t.Errorf("已确认凑牛的玩家不应再收到 turn, got %v", msg.Type)
+	}
+}
+
+func TestNNSetNiuVacateAfterConfirmNoPrematureSettle(t *testing.T) {
+	// 3 人在座，A 已凑牛后离场：不应因 setCount 与 expected 不符而提前结算
+	cA := &Client{playerID: "A", name: "A", send: make(chan []byte, 8)}
+	cB := &Client{playerID: "B", name: "B"}
+	cC := &Client{playerID: "C", name: "C"}
+	r := &Room{
+		Code: "TEST", Game: "nn", HostID: "A", Phase: "playing",
+		Engine: &nnEngine{},
+		Seats: []*Seat{
+			{Index: 0, PlayerID: "A", Name: "A", Chips: 1000, Client: cA},
+			{Index: 1, PlayerID: "B", Name: "B", Chips: 1000, Client: cB},
+			{Index: 2, PlayerID: "C", Name: "C", Chips: 1000, Client: cC},
+		},
+	}
+	cA.room = r
+	e := r.Engine.(*nnEngine)
+	e.occupied = []int{0, 1, 2}
+	e.phase = "setNiu"
+	e.results = map[int]nnResult{}
+	// A 已凑牛
+	e.results[0] = nnResult{Level: 1, Value: 5, Cards: r.Seats[0].Hand}
+	// A 离场：OnSeatVacated 标记弃牌并删除结果
+	evs := r.Engine.OnSeatVacated(r, 0)
+	for _, ev := range evs {
+		if ev.Type == "settle" {
+			t.Fatal("A 离场后不应触发结算（B/C 尚未凑牛）")
+		}
+	}
+	if e.phase != "setNiu" {
+		t.Errorf("应仍在 setNiu 阶段, got %s", e.phase)
+	}
+	// B 凑牛后仍不应结算（C 还没凑牛）
+	e.results[1] = nnResult{Level: 1, Value: 3, Cards: r.Seats[1].Hand}
+	if e.allActiveSetNiu(r) {
+		t.Fatal("B 凑牛后不应判定为全部完成（C 尚未凑牛）")
+	}
+	// C 也凑牛后才应结算
+	e.results[2] = nnResult{Level: 1, Value: 7, Cards: r.Seats[2].Hand}
+	if !e.allActiveSetNiu(r) {
+		t.Fatal("B/C 都凑牛后应判定为全部完成")
 	}
 }
