@@ -917,3 +917,53 @@ func TestHandleLeaveChipConservation(t *testing.T) {
 		t.Error("离场玩家应标记为弃牌")
 	}
 }
+
+// 验证 DDZ 结算截断误差修正：输方筹码不足时，int(scale*gain) 截断会导致筹码凭空消失
+// 场景：地主输，筹码仅 3（不足以赔付 2*delta=4），两个农民各应得 delta=2
+// scale=3/4=0.75，int(2*0.75)=1，两个农民各得 1，地主赔 3，总和 -1（1 筹码凭空消失）
+func TestDDZSettleTruncationFix(t *testing.T) {
+	r := &Room{Seats: []*Seat{
+		{Index: 0, PlayerID: "P0", Name: "P0", Chips: 1000}, // 农民
+		{Index: 1, PlayerID: "P1", Name: "P1", Chips: 3},     // 地主，筹码不足
+		{Index: 2, PlayerID: "P2", Name: "P2", Chips: 1000}, // 农民
+	}}
+	e := &ddzEngine{
+		occupied:     []int{0, 1, 2},
+		landlordSeat: 1,
+		baseScore:    2,
+		multiplier:   1,
+	}
+	initialTotal := r.Seats[0].Chips + r.Seats[1].Chips + r.Seats[2].Chips // 2003
+	_ = e.settle(r, 0) // 农民 P0 赢（地主输）
+	finalTotal := r.Seats[0].Chips + r.Seats[1].Chips + r.Seats[2].Chips
+	if finalTotal != initialTotal {
+		t.Errorf("截断误差导致筹码不守恒: final=%d, expected=%d（消失 %d）", finalTotal, initialTotal, initialTotal-finalTotal)
+	}
+}
+
+// 验证 NN 结算截断误差修正：庄家筹码不足时，int(scale*gain) 截断会导致筹码凭空消失
+func TestNNSettleTruncationFix(t *testing.T) {
+	r := &Room{Seats: []*Seat{
+		{Index: 0, PlayerID: "P0", Name: "P0", Chips: 5},   // 庄家，筹码不足
+		{Index: 1, PlayerID: "P1", Name: "P1", Chips: 1000}, // 闲家1
+		{Index: 2, PlayerID: "P2", Name: "P2", Chips: 1000}, // 闲家2
+	}}
+	e := &nnEngine{
+		occupied:    []int{0, 1, 2},
+		dealerIdx:   0,
+		currentBet:  2,
+		baseBet:     2,
+		pot:         0, // 无底池，仅测试庄闲结算
+		results:     map[int]nnResult{},
+	}
+	// P1、P2 都牛牛(倍数4)，庄家没牛 → 庄家输给每个闲家 4*2=8，总输 16
+	e.results[0] = nnResult{Level: 0, Value: 0, Multiplier: 1}
+	e.results[1] = nnResult{Level: 2, Value: 10, Multiplier: 4}
+	e.results[2] = nnResult{Level: 2, Value: 10, Multiplier: 4}
+	initialTotal := r.Seats[0].Chips + r.Seats[1].Chips + r.Seats[2].Chips // 2005
+	_ = e.settle(r)
+	finalTotal := r.Seats[0].Chips + r.Seats[1].Chips + r.Seats[2].Chips
+	if finalTotal != initialTotal {
+		t.Errorf("截断误差导致筹码不守恒: final=%d, expected=%d（消失 %d）", finalTotal, initialTotal, initialTotal-finalTotal)
+	}
+}

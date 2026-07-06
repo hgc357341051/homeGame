@@ -299,9 +299,10 @@ func (e *ddzEngine) settle(r *Room, winnerSeat int) []Event {
 	if winnersTotalGain > 0 && losersTotalCap < winnersTotalGain {
 		scale = float64(losersTotalCap) / float64(winnersTotalGain)
 	}
-	evs := []Event{}
-	results := []ActionData{}
-	for _, nm := range noms {
+	// 第一遍：计算各玩家实际 delta（int 截断会导致总和 < 0，筹码凭空消失）
+	actuals := make([]int, len(noms))
+	sumD := 0
+	for i, nm := range noms {
 		s := r.Seats[nm.seatIdx]
 		actualD := nm.d
 		if nm.d < 0 {
@@ -314,6 +315,24 @@ func (e *ddzEngine) settle(r *Room, winnerSeat int) []Event {
 		} else if nm.d > 0 && scale < 1.0 {
 			actualD = int(float64(nm.d) * scale)
 		}
+		actuals[i] = actualD
+		sumD += actualD
+	}
+	// 修正截断误差：sumD 应为 0（输方赔付 = 赢方收益），但因 int() 截断可能 < 0。
+	// 将差额加到最后一个赢家身上，确保筹码守恒。
+	if sumD < 0 {
+		for i := len(noms) - 1; i >= 0; i-- {
+			if noms[i].d > 0 {
+				actuals[i] -= sumD // sumD < 0，减去负数即加上 |sumD|
+				break
+			}
+		}
+	}
+	evs := []Event{}
+	results := []ActionData{}
+	for i, nm := range noms {
+		s := r.Seats[nm.seatIdx]
+		actualD := actuals[i]
 		s.Chips += actualD
 		s.SettledDelta = actualD
 		results = append(results, ActionData{"seat": nm.seatIdx, "name": s.Name, "delta": actualD, "chips": s.Chips,

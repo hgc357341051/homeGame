@@ -698,10 +698,11 @@ func (e *nnEngine) settle(r *Room) []Event {
 	if winnersGain > 0 && losersCap < winnersGain {
 		scale = float64(losersCap) / float64(winnersGain)
 	}
-	results := []ActionData{}
+	// 第一遍：计算庄闲结算的缩放后收益（int 截断会导致总和 < 0，筹码凭空消失）
+	scaledGains := make(map[int]int, len(e.occupied))
+	sumScaled := 0
 	for _, seatIdx := range e.occupied {
 		s := r.Seats[seatIdx]
-		// 庄闲结算部分（受 scale 折扣）
 		gain := deltaMap[seatIdx]
 		if gain < 0 {
 			// 输方赔付不超过自身筹码
@@ -713,8 +714,25 @@ func (e *nnEngine) settle(r *Room) []Event {
 		} else if gain > 0 && scale < 1.0 {
 			gain = int(float64(gain) * scale)
 		}
-		// 底池收益全额发放（不受 scale 影响）
-		gain += potShare[seatIdx]
+		scaledGains[seatIdx] = gain
+		sumScaled += gain
+	}
+	// 修正截断误差：sumScaled 应为 0（输方赔付 = 赢方收益），但因 int() 截断可能 < 0。
+	// 将差额加到最后一个赢家身上，确保筹码守恒。
+	if sumScaled < 0 {
+		for i := len(e.occupied) - 1; i >= 0; i-- {
+			seatIdx := e.occupied[i]
+			if deltaMap[seatIdx] > 0 {
+				scaledGains[seatIdx] -= sumScaled // sumScaled < 0，减去负数即加上 |sumScaled|
+				break
+			}
+		}
+	}
+	results := []ActionData{}
+	for _, seatIdx := range e.occupied {
+		s := r.Seats[seatIdx]
+		// 总收益 = 庄闲结算（已修正截断）+ 底池收益（全额，不受 scale 影响）
+		gain := scaledGains[seatIdx] + potShare[seatIdx]
 		s.Chips += gain
 		// SettledDelta 为本局总盈亏 = 收益 - 自己已下的注（注码已在押注阶段扣除）
 		s.SettledDelta = gain - s.CurrentBet
