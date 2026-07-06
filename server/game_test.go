@@ -854,3 +854,66 @@ func TestHandleKickChipConservation(t *testing.T) {
 		t.Errorf("赢家 Chips 应为 1010, got %d", r.Seats[0].Chips)
 	}
 }
+
+// 验证 handleLeave 筹码守恒：对局中主动离开时，必须保留 CurrentBet 供引擎结算。
+// 修复前 standLocked 在 OnSeatVacated 之前调用，重置 Chips/CurrentBet，
+// 导致离场玩家 delta=0 且 Chips 被重置为初始值，但底注仍在 pot 中归赢家，
+// 筹码凭空增加。与 handleKick 同类 bug。
+func TestHandleLeaveChipConservation(t *testing.T) {
+	p0Client := &Client{playerID: "P0", name: "玩家0", send: make(chan []byte, 16)}
+	p1Client := &Client{playerID: "P1", name: "玩家1", send: make(chan []byte, 16)}
+	r := &Room{
+		Code:   "TEST",
+		Game:   "zjh",
+		HostID: "P0",
+		Phase:  "playing",
+		Seats: []*Seat{
+			{Index: 0, PlayerID: "P0", Name: "玩家0", Chips: 990, Client: p0Client, CurrentBet: 10},
+			{Index: 1, PlayerID: "P1", Name: "玩家1", Chips: 990, Client: p1Client, CurrentBet: 10},
+		},
+	}
+	p0Client.room = r
+	p1Client.room = r
+	e := &zjhEngine{
+		occupied:    []int{0, 1},
+		currentSeat: 0,
+		baseBet:     2,
+		currentBet:  2,
+		cap:         32,
+		pot:         20,
+		phase:       "betting",
+		activeCount: 2,
+	}
+	r.Engine = e
+
+	initialTotal := r.Seats[0].Chips + r.Seats[1].Chips + e.pot // 2000
+
+	// P1 对局中主动离开
+	r.handleLeave(p1Client)
+
+	// 对局应已结算（仅剩 P0 一人活跃）
+	if r.Phase != "settled" {
+		t.Fatalf("离场后应结算, got Phase=%s", r.Phase)
+	}
+	// P1 的底注应被正确计入盈亏（delta = -10），而非 0
+	if r.Seats[1].SettledDelta != -10 {
+		t.Errorf("离场玩家 delta 应为 -10, got %d（CurrentBet 可能被 standLocked 重置）", r.Seats[1].SettledDelta)
+	}
+	// P1 的 Chips 不应被 standLocked 重置为 startChips(1000)
+	if r.Seats[1].Chips != 990 {
+		t.Errorf("离场玩家 Chips 应保持 990, got %d（可能被 standLocked 重置为初始值）", r.Seats[1].Chips)
+	}
+	// 筹码守恒
+	finalTotal := r.Seats[0].Chips + r.Seats[1].Chips
+	if finalTotal != initialTotal {
+		t.Errorf("筹码不守恒: final=%d, expected=%d（凭空增减 %d）", finalTotal, initialTotal, finalTotal-initialTotal)
+	}
+	// P0 应赢得底池
+	if r.Seats[0].Chips != 1010 {
+		t.Errorf("赢家 Chips 应为 1010, got %d", r.Seats[0].Chips)
+	}
+	// P1 应标记为弃牌（避免被引擎误认为活跃）
+	if !r.Seats[1].IsFolded {
+		t.Error("离场玩家应标记为弃牌")
+	}
+}

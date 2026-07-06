@@ -322,18 +322,31 @@ func (r *Room) handleLeave(c *Client) {
 			break
 		}
 	}
-	// 座位：无论阶段直接释放（主动离开=永久移除）
+	// 座位处理
 	vacatedSeat := -1
+	wasPlaying := false
 	for _, s := range r.Seats {
 		if s.Client == c {
 			vacatedSeat = s.Index
-			r.standLocked(s.Index)
+			if r.Phase == "playing" {
+				// 对局中离场：标记弃牌并保留 PlayerID/Chips/CurrentBet 供引擎结算。
+				// 若先 standLocked 会重置 Chips/CurrentBet，导致离场玩家 delta=0
+				// 但底注仍在 pot 中归赢家，筹码凭空增加（与 handleKick 同类 bug）。
+				// 设置 DisconnectedAt 以便 handleStart 释放该座位。
+				wasPlaying = true
+				s.IsFolded = true
+				s.Client = nil
+				s.DisconnectedAt = time.Now()
+			} else {
+				// 非对局中：直接释放座位
+				r.standLocked(s.Index)
+			}
 			break
 		}
 	}
 	c.room = nil
 	var evs []Event
-	if vacatedSeat >= 0 && r.Phase == "playing" {
+	if vacatedSeat >= 0 && wasPlaying {
 		evs = r.Engine.OnSeatVacated(r, vacatedSeat)
 	}
 	if r.Phase == "settled" {
