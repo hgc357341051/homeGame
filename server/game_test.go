@@ -605,6 +605,39 @@ func TestHostDisconnectAsSpectatorTransfersHost(t *testing.T) {
 	}
 }
 
+// 验证房主在对局中掉线（座位保留）时房主身份不立即转移，等待重连
+func TestHostInGameDisconnectKeepsHostForReconnect(t *testing.T) {
+	hostClient := &Client{playerID: "HOST", name: "房主", send: make(chan []byte, 8)}
+	p1Client := &Client{playerID: "P1", name: "玩家1", send: make(chan []byte, 8)}
+	r := &Room{
+		Code:   "TEST",
+		Game:   "zjh",
+		HostID: "HOST",
+		Phase:  "playing",
+		Engine: &zjhEngine{},
+		Seats: []*Seat{
+			{Index: 0, PlayerID: "HOST", Name: "房主", Chips: 1000, Client: hostClient},
+			{Index: 1, PlayerID: "P1", Name: "玩家1", Chips: 1000, Client: p1Client},
+		},
+	}
+	hostClient.room = r
+	p1Client.room = r
+	// 房主在对局中掉线
+	r.handleDisconnect(hostClient)
+	if r.HostID != "HOST" {
+		t.Errorf("对局中房主掉线应保留房主身份等待重连, got HostID=%s", r.HostID)
+	}
+	if r.Seats[0].PlayerID != "HOST" {
+		t.Errorf("座位应保留给房主, got PlayerID=%s", r.Seats[0].PlayerID)
+	}
+	if r.Seats[0].Client != nil {
+		t.Error("掉线后座位 Client 应为 nil")
+	}
+	if r.Seats[0].DisconnectedAt.IsZero() {
+		t.Error("应记录掉线时间")
+	}
+}
+
 // 验证开局时释放上一局遗留的掉线座位（避免重连拿到旧手牌）
 func TestStartReleasesOfflineSeatsWithStaleHand(t *testing.T) {
 	hostClient := &Client{playerID: "HOST", name: "房主", send: make(chan []byte, 8)}

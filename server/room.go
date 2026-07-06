@@ -246,11 +246,13 @@ func (r *Room) handleDisconnect(c *Client) {
 	r.mu.Lock()
 	leaveName := c.name
 	found := false
+	wasSpectator := false
 	// 旁观者移除
 	for i, sp := range r.Spectators {
 		if sp == c {
 			r.Spectators = append(r.Spectators[:i], r.Spectators[i+1:]...)
 			found = true
+			wasSpectator = true
 			break
 		}
 	}
@@ -260,6 +262,8 @@ func (r *Room) handleDisconnect(c *Client) {
 			if r.Phase == "playing" {
 				s.Client = nil
 				s.DisconnectedAt = time.Now()
+				// 对局中掉线保留座位：房主身份暂不转移，等待重连。
+				// 对局结束时 applyAction/handleLeave 会调用 ensureHostLocked 兜底转移。
 			} else {
 				// waiting / settled 阶段直接释放座位，避免离线座位残留阻塞新玩家入座
 				r.standLocked(s.Index)
@@ -268,9 +272,9 @@ func (r *Room) handleDisconnect(c *Client) {
 			break
 		}
 	}
-	// 房主断线（无论在座还是旁观）：确保房主仍有效，转移给最早在线在座玩家
-	// 避免"房主掉线后房间无人可开局"的死锁
-	if c.playerID == r.HostID {
+	// 房主以旁观者身份断线：无座位可保留，需立即转移给在线在座玩家
+	// （在座掉线的房主不在此处理，由对局结束时的 ensureHostLocked 兜底）
+	if wasSpectator && c.playerID == r.HostID {
 		r.ensureHostLocked()
 	}
 	r.broadcastStateAsync()
