@@ -231,6 +231,24 @@ func TestZJH235OnlyKillsTriple(t *testing.T) {
 	}
 }
 
+// 验证 235 同花（金花）不杀豹子：仅散牌 235 才适用特殊规则
+func TestZJH235FlushDoesNotKillTriple(t *testing.T) {
+	aaa := []Card{tc("♠", "A", 14), tc("♥", "A", 14), tc("♦", "A", 14)}
+	two35Flush := []Card{tc("♠", "2", 2), tc("♠", "3", 3), tc("♠", "5", 5)}
+	aHand, _ := evalZJH(aaa)
+	bHand, _ := evalZJH(two35Flush)
+	if bHand.Type != 3 {
+		t.Fatalf("2♠3♠5♠ 应为金花(Type=3), got Type=%d", bHand.Type)
+	}
+	// 235 金花不应杀豹子，豹子应赢
+	if zjhCompare(bHand, aHand) >= 0 {
+		t.Error("235 金花不应杀豹子")
+	}
+	if zjhCompare(aHand, bHand) <= 0 {
+		t.Error("豹子应赢 235 金花")
+	}
+}
+
 // 验证 ZJH Score 编码范围不重叠
 func TestZJHScoreRange(t *testing.T) {
 	// 单张最大 A-K-J（非连续，避免误判为顺子）: enc(14,13,11)=14*225+13*15+11=3150+195+11=3356

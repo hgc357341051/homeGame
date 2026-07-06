@@ -76,12 +76,12 @@ func is235(cards []Card) bool {
 }
 
 func zjhCompare(a, b zjhHand) int {
-	// 特殊规则：235 杀豹子（仅当一方为 235 散牌、另一方为豹子时生效）
+	// 特殊规则：235 散牌杀豹子（仅当一方为 235 且为散牌、另一方为豹子时生效）
 	a235, b235 := is235(a.Cards), is235(b.Cards)
-	if a235 && b.Type == 5 {
+	if a235 && a.Type == 0 && b.Type == 5 {
 		return 1
 	}
-	if b235 && a.Type == 5 {
+	if b235 && b.Type == 0 && a.Type == 5 {
 		return -1
 	}
 	if a.Score > b.Score {
