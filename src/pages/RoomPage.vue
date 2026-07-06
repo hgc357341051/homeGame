@@ -88,14 +88,6 @@ function seatStyle(seatIndex: number): Record<string, string> {
   }
 }
 
-function seatPosition(seatIndex: number): 'top' | 'left' | 'right' | 'bottom' {
-  const a = seatAngle(seatIndex)
-  if (a < 45 || a >= 315) return 'top'
-  if (a < 135) return 'right'
-  if (a < 225) return 'bottom'
-  return 'left'
-}
-
 function onCardsChange(cards: Card[]) {
   selectedCards.value = cards
 }
@@ -328,7 +320,6 @@ onUnmounted(() => {
                   :seat="s"
                   :is-current="store.turn?.seat === s.seat && phase === 'playing'"
                   :is-me="s.seat === mySeat"
-                  :position="seatPosition(s.seat)"
                   :compact="isMobile"
                 />
               </div>

@@ -7,7 +7,6 @@ const props = defineProps<{
   seat: SeatView
   isCurrent: boolean
   isMe: boolean
-  position: 'top' | 'left' | 'right' | 'bottom'
   compact?: boolean
 }>()
 
@@ -72,7 +71,7 @@ function renameSeat() {
 </script>
 
 <template>
-  <div class="seat" :class="[position, { current: isCurrent, me: isMe, empty }]">
+  <div class="seat" :class="{ current: isCurrent, me: isMe, empty }">
     <div class="avatar-wrap">
       <div class="avatar" v-if="!empty">{{ seat.avatar }}</div>
       <div class="avatar placeholder" v-else>+</div>

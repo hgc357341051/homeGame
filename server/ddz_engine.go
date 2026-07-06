@@ -15,7 +15,6 @@ type ddzEngine struct {
 	firstCallerIdx  int // 首个叫地主者（用于判定全部 pass 重新发牌）
 	baseScore       int
 	multiplier      int
-	winnerTeam      int // 0=地主胜 1=农民胜
 }
 
 func (e *ddzEngine) Name() string  { return "ddz" }
@@ -320,7 +319,6 @@ func (e *ddzEngine) settle(r *Room, winnerSeat int) []Event {
 		results = append(results, ActionData{"seat": nm.seatIdx, "name": s.Name, "delta": actualD, "chips": s.Chips,
 			"isLandlord": nm.seatIdx == e.landlordSeat, "win": actualD > 0})
 	}
-	e.winnerTeam = map[bool]int{true: 0, false: 1}[landlordWin]
 	evs = append(evs, Event{Type: "phase", Data: ActionData{"phase": "settled", "message": "对局结束", "winnerSeat": winnerSeat, "landlordWin": landlordWin}, Target: -1})
 	evs = append(evs, Event{Type: "settle", Data: ActionData{"results": results, "game": "ddz", "landlordWin": landlordWin, "multiplier": e.multiplier}, Target: -1})
 	r.Phase = "settled"

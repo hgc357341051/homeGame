@@ -53,14 +53,15 @@ const coins = Array.from({ length: 18 }, (_, i) => ({
 
         <div class="head">
           <div class="title" :class="{ win: isWin, lose: !isWin }">
-            <template v-if="data?.game === 'ddz'">
+            <template v-if="data?.aborted">本局中止</template>
+            <template v-else-if="data?.game === 'ddz'">
               {{ data?.landlordWin ? '地主胜利' : '农民胜利' }}
             </template>
             <template v-else>
               {{ winnerName }} 获胜
             </template>
           </div>
-          <div class="sub">{{ isWin ? '恭喜你赢得本局' : '再接再厉' }}</div>
+          <div class="sub">{{ data?.aborted ? '全员离场，注码退还' : (isWin ? '恭喜你赢得本局' : '再接再厉') }}</div>
         </div>
 
         <div class="results">
