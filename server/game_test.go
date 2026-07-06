@@ -792,3 +792,65 @@ func TestStartReleasesOfflineSeatsWithStaleHand(t *testing.T) {
 		t.Errorf("掉线座位的旧手牌应已清空, got %d 张", len(r.Seats[2].Hand))
 	}
 }
+
+// 验证 handleKick 筹码守恒：对局中踢出掉线玩家时，必须保留 CurrentBet 供引擎结算。
+// 修复前 standLocked 会重置 CurrentBet=0/Chips=startChips，导致被踢玩家 delta=0
+// 且 Chips 被重置为初始值，但底注仍在 pot 中归赢家，筹码凭空增加。
+// 此外，OnSeatVacated 可能把 phase 从 playing 改为 settled，若用改后的 phase 判断
+// 会误触发 standLocked，重置已结算的 Chips/SettledDelta。
+func TestHandleKickChipConservation(t *testing.T) {
+	hostClient := &Client{playerID: "P0", name: "房主", send: make(chan []byte, 16)}
+	r := &Room{
+		Code:   "TEST",
+		Game:   "zjh",
+		HostID: "P0",
+		Phase:  "playing",
+		Seats: []*Seat{
+			{Index: 0, PlayerID: "P0", Name: "房主", Chips: 990, Client: hostClient, CurrentBet: 10},
+			{Index: 1, PlayerID: "P1", Name: "玩家1", Chips: 990, Client: nil, CurrentBet: 10, DisconnectedAt: time.Now()},
+		},
+	}
+	hostClient.room = r
+	e := &zjhEngine{
+		occupied:    []int{0, 1},
+		currentSeat: 0,
+		baseBet:     2,
+		currentBet:  2,
+		cap:         32,
+		pot:         20,
+		phase:       "betting",
+		activeCount: 2,
+	}
+	r.Engine = e
+
+	// 初始总财富 = 玩家筹码 + 底池（底池是已从玩家扣除的注码）
+	initialTotal := r.Seats[0].Chips + r.Seats[1].Chips + e.pot // 990+990+20=2000
+
+	// 房主踢出掉线的 P1
+	r.handleKick(hostClient, ActionData{"seat": float64(1)})
+
+	// 对局应已结算（仅剩 P0 一人活跃）
+	if r.Phase != "settled" {
+		t.Fatalf("踢出后应结算, got Phase=%s", r.Phase)
+	}
+	// P1 的底注应被正确计入盈亏（delta = -CurrentBet = -10），而非 0
+	if r.Seats[1].SettledDelta != -10 {
+		t.Errorf("被踢玩家 delta 应为 -10, got %d（CurrentBet 可能被 standLocked 重置）", r.Seats[1].SettledDelta)
+	}
+	// P1 的 Chips 不应被 standLocked 重置为 startChips(1000)
+	if r.Seats[1].Chips != 990 {
+		t.Errorf("被踢玩家 Chips 应保持 990, got %d（可能被 standLocked 重置为初始值）", r.Seats[1].Chips)
+	}
+	// 筹码守恒：结算后总财富 = 玩家筹码之和（pot 已分配给赢家）
+	finalTotal := r.Seats[0].Chips + r.Seats[1].Chips
+	if finalTotal != initialTotal {
+		t.Errorf("筹码不守恒: final=%d, expected=%d（凭空增减 %d）", finalTotal, initialTotal, finalTotal-initialTotal)
+	}
+	// P0 应赢得底池
+	if r.Seats[0].SettledDelta != 10 {
+		t.Errorf("赢家 delta 应为 +10, got %d", r.Seats[0].SettledDelta)
+	}
+	if r.Seats[0].Chips != 1010 {
+		t.Errorf("赢家 Chips 应为 1010, got %d", r.Seats[0].Chips)
+	}
+}

@@ -370,12 +370,25 @@ func (r *Room) handleKick(c *Client, data ActionData) {
 		return
 	}
 	kickName := s.Name
-	r.standLocked(seatNum)
+	wasHost := s.PlayerID == r.HostID
+	// 先标记弃牌并断开连接，保留 PlayerID/Chips/CurrentBet 供引擎结算使用。
+	// 若先 standLocked 会重置 Chips/CurrentBet，导致被踢玩家的底注凭空消失
+	// （delta=0 但底注仍在 pot 中归赢家，筹码不守恒）。
+	s.IsFolded = true
+	s.Client = nil
 	var evs []Event
-	if r.Phase == "playing" {
+	// 快照阶段：OnSeatVacated 可能将 phase 从 playing 改为 settled，
+	// 若用改后的 phase 判断会误触发 standLocked，重置已结算的 Chips/SettledDelta。
+	wasPlaying := r.Phase == "playing"
+	if wasPlaying {
 		evs = r.Engine.OnSeatVacated(r, seatNum)
 	}
-	if r.Phase == "settled" {
+	// 仅在原非对局中释放座位；对局中/对局刚结算时保留 PlayerID/Chips/CurrentBet，
+	// 待最终结算或下局 handleStart 时清理（handleStart 会释放所有 isOffline 座位）。
+	if !wasPlaying {
+		r.standLocked(seatNum)
+	}
+	if wasHost {
 		r.ensureHostLocked()
 	}
 	r.mu.Unlock()
