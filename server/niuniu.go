@@ -209,9 +209,23 @@ type nnEngine struct {
 	currentSeat    int // occupied 索引，押注轮到的玩家
 	actedThisRound []bool // 本轮押注中各 occupied 索引是否已行动
 	phase          string // betting / setNiu / settled
-	setCount       int
 	results        map[int]nnResult // seat -> 结果
 	totalSeats     int
+}
+
+// allActiveSetNiu 检查所有未弃牌、未腾空的玩家是否都已确认凑牛。
+// 直接检查 results map 而非依赖计数器，避免玩家凑牛后离场导致计数器与实际不符。
+func (e *nnEngine) allActiveSetNiu(r *Room) bool {
+	for _, seatIdx := range e.occupied {
+		s := r.Seats[seatIdx]
+		if s.IsFolded || s.PlayerID == "" {
+			continue
+		}
+		if _, done := e.results[seatIdx]; !done {
+			return false
+		}
+	}
+	return true
 }
 
 func (e *nnEngine) Name() string    { return "nn" }
@@ -254,14 +268,8 @@ func (e *nnEngine) OnSeatVacated(r *Room, seat int) []Event {
 		}
 		return []Event{e.turnEvent(r)}
 	}
-	// setNiu 阶段：若所有非弃牌玩家都已凑牛，则直接结算
-	expected := 0
-	for _, seatIdx := range e.occupied {
-		if !r.Seats[seatIdx].IsFolded {
-			expected++
-		}
-	}
-	if e.setCount >= expected {
+	// setNiu 阶段：若所有未弃牌玩家都已凑牛，则直接结算
+	if e.allActiveSetNiu(r) {
 		return e.settle(r)
 	}
 	return nil
@@ -275,7 +283,6 @@ func (e *nnEngine) Start(r *Room) []Event {
 	e.cap = 32
 	e.pot = 0
 	e.phase = "betting"
-	e.setCount = 0
 	e.results = map[int]nnResult{}
 	e.occupied = nil
 	for _, s := range r.Seats {
@@ -365,7 +372,6 @@ func (e *nnEngine) bettingRoundComplete(r *Room) bool {
 // enterSetNiu 押注结束，进入凑牛阶段
 func (e *nnEngine) enterSetNiu(r *Room) []Event {
 	e.phase = "setNiu"
-	e.setCount = 0
 	dealerSeat := e.occupied[e.dealerIdx]
 	evs := []Event{Event{Type: "phase", Data: ActionData{
 		"phase": "setNiu", "message": "选择 3 张凑牛（或自动）",
@@ -593,16 +599,9 @@ func (e *nnEngine) handleSetNiu(r *Room, seat int, action string, data ActionDat
 	if res.NiuCards != nil {
 		s.NiuCards = res.NiuCards
 	}
-	e.setCount++
 	evs := []Event{{Type: "phase", Data: ActionData{"event": "niuniuSet", "seat": seat, "name": s.Name, "name2": nnName(res)}, Target: -1}}
-	// 仅统计非弃牌玩家是否都已凑牛
-	expected := 0
-	for _, seatIdx := range e.occupied {
-		if !r.Seats[seatIdx].IsFolded {
-			expected++
-		}
-	}
-	if e.setCount >= expected {
+	// 所有未弃牌玩家都已凑牛则结算
+	if e.allActiveSetNiu(r) {
 		return append(evs, e.settle(r)...)
 	}
 	return evs

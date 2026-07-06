@@ -443,3 +443,46 @@ func TestNNResendTurnSetNiu(t *testing.T) {
 		t.Errorf("已确认凑牛的玩家不应再收到 turn, got %v", msg.Type)
 	}
 }
+
+func TestNNSetNiuVacateAfterConfirmNoPrematureSettle(t *testing.T) {
+	// 3 人在座，A 已凑牛后离场：不应因 setCount 与 expected 不符而提前结算
+	cA := &Client{playerID: "A", name: "A", send: make(chan []byte, 8)}
+	cB := &Client{playerID: "B", name: "B"}
+	cC := &Client{playerID: "C", name: "C"}
+	r := &Room{
+		Code: "TEST", Game: "nn", HostID: "A", Phase: "playing",
+		Engine: &nnEngine{},
+		Seats: []*Seat{
+			{Index: 0, PlayerID: "A", Name: "A", Chips: 1000, Client: cA},
+			{Index: 1, PlayerID: "B", Name: "B", Chips: 1000, Client: cB},
+			{Index: 2, PlayerID: "C", Name: "C", Chips: 1000, Client: cC},
+		},
+	}
+	cA.room = r
+	e := r.Engine.(*nnEngine)
+	e.occupied = []int{0, 1, 2}
+	e.phase = "setNiu"
+	e.results = map[int]nnResult{}
+	// A 已凑牛
+	e.results[0] = nnResult{Level: 1, Value: 5, Cards: r.Seats[0].Hand}
+	// A 离场：OnSeatVacated 标记弃牌并删除结果
+	evs := r.Engine.OnSeatVacated(r, 0)
+	for _, ev := range evs {
+		if ev.Type == "settle" {
+			t.Fatal("A 离场后不应触发结算（B/C 尚未凑牛）")
+		}
+	}
+	if e.phase != "setNiu" {
+		t.Errorf("应仍在 setNiu 阶段, got %s", e.phase)
+	}
+	// B 凑牛后仍不应结算（C 还没凑牛）
+	e.results[1] = nnResult{Level: 1, Value: 3, Cards: r.Seats[1].Hand}
+	if e.allActiveSetNiu(r) {
+		t.Fatal("B 凑牛后不应判定为全部完成（C 尚未凑牛）")
+	}
+	// C 也凑牛后才应结算
+	e.results[2] = nnResult{Level: 1, Value: 7, Cards: r.Seats[2].Hand}
+	if !e.allActiveSetNiu(r) {
+		t.Fatal("B/C 都凑牛后应判定为全部完成")
+	}
+}
