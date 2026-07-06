@@ -504,3 +504,102 @@ func TestNNSetNiuVacateAfterConfirmNoPrematureSettle(t *testing.T) {
 		t.Fatal("B/C 都凑牛后应判定为全部完成")
 	}
 }
+
+// 验证房主换座时保留房主身份（standLocked 会误转移给其他在座玩家）
+func TestHostSwitchSeatKeepsHost(t *testing.T) {
+	hostClient := &Client{playerID: "HOST", name: "房主", send: make(chan []byte, 8)}
+	p1Client := &Client{playerID: "P1", name: "玩家1", send: make(chan []byte, 8)}
+	r := &Room{
+		Code:   "TEST",
+		Game:   "zjh",
+		HostID: "HOST",
+		Phase:  "waiting",
+		Engine: &zjhEngine{},
+		Seats: []*Seat{
+			{Index: 0, PlayerID: "HOST", Name: "房主", Chips: 1000, Client: hostClient},
+			{Index: 1, PlayerID: "P1", Name: "玩家1", Chips: 1000, Client: p1Client},
+			{Index: 2, PlayerID: "", Name: "", Chips: 1000, Client: nil},
+		},
+	}
+	hostClient.room = r
+	p1Client.room = r
+	// 房主从座位 0 换到座位 2
+	r.handleSit(hostClient, ActionData{"seat": float64(2)})
+	if r.HostID != "HOST" {
+		t.Errorf("房主换座后应保留房主身份, got HostID=%s", r.HostID)
+	}
+	if r.Seats[0].PlayerID != "" {
+		t.Errorf("原座位应已腾空, got PlayerID=%s", r.Seats[0].PlayerID)
+	}
+	if r.Seats[2].PlayerID != "HOST" {
+		t.Errorf("应已入座座位 2, got PlayerID=%s", r.Seats[2].PlayerID)
+	}
+}
+
+// 验证离座旁观后加入旁观者列表且保留房主身份
+func TestStandAddsToSpectatorsAndKeepsHost(t *testing.T) {
+	hostClient := &Client{playerID: "HOST", name: "房主", send: make(chan []byte, 8)}
+	p1Client := &Client{playerID: "P1", name: "玩家1", send: make(chan []byte, 8)}
+	r := &Room{
+		Code:   "TEST",
+		Game:   "zjh",
+		HostID: "HOST",
+		Phase:  "waiting",
+		Engine: &zjhEngine{},
+		Seats: []*Seat{
+			{Index: 0, PlayerID: "HOST", Name: "房主", Chips: 1000, Client: hostClient},
+			{Index: 1, PlayerID: "P1", Name: "玩家1", Chips: 1000, Client: p1Client},
+		},
+	}
+	hostClient.room = r
+	p1Client.room = r
+	// 房主离座旁观
+	r.applyAction(hostClient, "stand", nil)
+	if r.HostID != "HOST" {
+		t.Errorf("房主离座旁观后应保留房主身份, got HostID=%s", r.HostID)
+	}
+	found := false
+	for _, sp := range r.Spectators {
+		if sp == hostClient {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("房主离座旁观后应在旁观者列表中")
+	}
+	if r.Seats[0].PlayerID != "" {
+		t.Errorf("原座位应已腾空, got PlayerID=%s", r.Seats[0].PlayerID)
+	}
+}
+
+// 验证房主以旁观者身份断线时房主转移给在座玩家
+func TestHostDisconnectAsSpectatorTransfersHost(t *testing.T) {
+	hostClient := &Client{playerID: "HOST", name: "房主", send: make(chan []byte, 8)}
+	p1Client := &Client{playerID: "P1", name: "玩家1", send: make(chan []byte, 8)}
+	r := &Room{
+		Code:   "TEST",
+		Game:   "zjh",
+		HostID: "HOST",
+		Phase:  "waiting",
+		Engine: &zjhEngine{},
+		Seats: []*Seat{
+			{Index: 0, PlayerID: "P1", Name: "玩家1", Chips: 1000, Client: p1Client},
+		},
+		Spectators: []*Client{hostClient},
+	}
+	hostClient.room = r
+	p1Client.room = r
+	// 房主（旁观者）断线
+	r.handleDisconnect(hostClient)
+	if r.HostID != "P1" {
+		t.Errorf("房主旁观断线后应转移给 P1, got HostID=%s", r.HostID)
+	}
+	// 旁观者列表应已移除
+	for _, sp := range r.Spectators {
+		if sp == hostClient {
+			t.Error("断线的旁观房主应已从旁观者列表移除")
+			break
+		}
+	}
+}

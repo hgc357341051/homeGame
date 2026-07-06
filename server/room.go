@@ -268,6 +268,11 @@ func (r *Room) handleDisconnect(c *Client) {
 			break
 		}
 	}
+	// 房主断线（无论在座还是旁观）：确保房主仍有效，转移给最早在线在座玩家
+	// 避免"房主掉线后房间无人可开局"的死锁
+	if c.playerID == r.HostID {
+		r.ensureHostLocked()
+	}
 	r.broadcastStateAsync()
 	// 快照 phase，避免 Unlock 后读取 r.Phase 产生数据竞争
 	phase := r.Phase
@@ -453,7 +458,14 @@ func (r *Room) applyAction(c *Client, action string, data ActionData) {
 			return
 		case "stand":
 			standName := r.Seats[seat].Name
+			// 离座旁观时房主身份保留（与 ensureHostLocked 一致：旁观者可为房主）
+			wasHost := r.Seats[seat].PlayerID == r.HostID
 			r.standLocked(seat)
+			if wasHost {
+				r.HostID = c.playerID
+			}
+			// 离座后加入旁观者，确保仍能收到房间状态更新与广播
+			r.Spectators = append(r.Spectators, c)
 			r.mu.Unlock()
 			r.systemChat(standName + " 离座旁观")
 			r.broadcastState()
@@ -557,7 +569,13 @@ func (r *Room) handleSit(c *Client, data ActionData) {
 		return
 	}
 	if cur >= 0 && r.Phase != "playing" {
+		// 换座时房主身份应保留：standLocked 会因 host 离座触发 transferHostLocked，
+		// 把房主误转给其他在座玩家。换座不算离场，需在 stand 后恢复。
+		wasHost := c.playerID == r.HostID
 		r.standLocked(cur)
+		if wasHost {
+			r.HostID = c.playerID
+		}
 	}
 	seat := -1
 	if v, ok := data["seat"].(float64); ok {
