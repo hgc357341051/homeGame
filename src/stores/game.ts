@@ -117,6 +117,9 @@ export const useGameStore = defineStore('game', () => {
       socket = ws
       let settled = false
       ws.onopen = () => {
+        // 超时保护可能已关闭 ws 并 reject：此时 onopen 仍在 closing/closed socket 上触发，
+        // 直接 send 会抛 InvalidStateError。检查 readyState 避免异常。
+        if (ws.readyState !== WebSocket.OPEN) return
         connected.value = true
         connecting.value = false
         reconnecting.value = false
@@ -230,10 +233,11 @@ export const useGameStore = defineStore('game', () => {
             myHand.value[idx] = (d.cards as Card[])[0]
             myHand.value = [...myHand.value]
           }
-        } else if (d.blindMode && d.cards && d.lookedIndices) {
-          // 蒙牌模式：状态刷新（重连），已查看位置有牌值，未查看为零值占位
+        } else if (d.blindMode && d.cards) {
+          // 蒙牌模式状态刷新（重连）：已查看位置显示牌值，未查看显示牌背。
+          // lookedIndices 可能为 null（服务端未初始化），此时全部按未查看处理。
           const cards = d.cards as Card[]
-          const looked = d.lookedIndices as boolean[]
+          const looked = (d.lookedIndices as boolean[] | null) || []
           myHand.value = cards.map((c, i) => looked[i] ? c : { suit: '', rank: '?', value: 0 })
         } else {
           myHand.value = d.cards || []
