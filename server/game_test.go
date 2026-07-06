@@ -605,6 +605,49 @@ func TestHostDisconnectAsSpectatorTransfersHost(t *testing.T) {
 	}
 }
 
+// 验证重连后补发手牌（掉线期间手牌保留在 Seat.Hand，重连需重新发送 deal）
+func TestReclaimResendsHand(t *testing.T) {
+	oldClient := &Client{playerID: "P1", name: "玩家1", send: make(chan []byte, 8)}
+	r := &Room{
+		Code:   "TEST",
+		Game:   "zjh",
+		HostID: "P1",
+		Phase:  "playing",
+		Engine: &zjhEngine{},
+		Seats: []*Seat{
+			{Index: 0, PlayerID: "P1", Name: "玩家1", Chips: 1000, Client: oldClient, Hand: []Card{tc("♠", "A", 14), tc("♥", "K", 13), tc("♦", "Q", 12)}},
+		},
+	}
+	oldClient.room = r
+	// 模拟掉线
+	r.Seats[0].Client = nil
+	r.Seats[0].DisconnectedAt = time.Now()
+
+	// 新连接重连
+	newClient := &Client{playerID: "P1", name: "玩家1", send: make(chan []byte, 8)}
+	newClient.room = r
+	reclaimed := r.tryReclaim(newClient)
+	if !reclaimed {
+		t.Fatal("应成功夺回座位")
+	}
+	// 应收到 deal 事件包含手牌
+	msg := recvMsg(newClient.send)
+	if msg == nil {
+		t.Fatal("重连后应收到 deal 消息")
+	}
+	if msg.Type != "deal" {
+		t.Errorf("应收到 deal 事件, got %s", msg.Type)
+	}
+	data, _ := msg.Data.(map[string]interface{})
+	if data == nil {
+		t.Fatal("deal 消息 Data 应为 map")
+	}
+	cards, _ := data["cards"].([]interface{})
+	if len(cards) != 3 {
+		t.Errorf("应收到 3 张手牌, got %d", len(cards))
+	}
+}
+
 // 验证房主在对局中掉线（座位保留）时房主身份不立即转移，等待重连
 func TestHostInGameDisconnectKeepsHostForReconnect(t *testing.T) {
 	hostClient := &Client{playerID: "HOST", name: "房主", send: make(chan []byte, 8)}

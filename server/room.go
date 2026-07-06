@@ -823,6 +823,9 @@ func (r *Room) tryReclaim(c *Client) bool {
 			// 掉线座位夺回
 			s.Client = c
 			s.DisconnectedAt = time.Time{}
+			// 补发手牌：掉线期间手牌仍保留在 Seat.Hand，但 deal 事件未持久化，
+			// 重连后需重新发送，否则玩家看不到自己的牌
+			c.sendMsg(Message{Type: "deal", Data: ActionData{"cards": r.Engine.PlayerHand(s)}})
 			// 重连后补发当前轮次信息，使玩家能立即看到可用操作
 			r.Engine.ResendTurn(r, c)
 			return true
@@ -832,6 +835,8 @@ func (r *Room) tryReclaim(c *Client) bool {
 			// 旧连接的 readPump 终止时会触发 unregister→handleDisconnect，但找不到该 client 已不处理
 			s.Client = c
 			s.DisconnectedAt = time.Time{}
+			// 同样补发手牌（新连接尚未收到 deal 事件）
+			c.sendMsg(Message{Type: "deal", Data: ActionData{"cards": r.Engine.PlayerHand(s)}})
 			r.Engine.ResendTurn(r, c)
 			return true
 		}
