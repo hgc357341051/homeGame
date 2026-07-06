@@ -132,30 +132,36 @@ func (r *Room) firstEmptySeat() int {
 	return -1
 }
 
+// broadcast 向房间内目标客户端发送事件。
+// 必须在未持有 r.mu 时调用：先在锁下快照目标客户端列表，
+// 再解锁发送，避免与 standLocked/handleSit 等并发修改 Seats/Spectators 竞争。
 func (r *Room) broadcast(ev Event) {
+	var targets []*Client
+	r.mu.Lock()
 	switch ev.Target {
 	case -1:
 		for _, s := range r.Seats {
 			if s.occupied() {
-				s.Client.sendMsg(Message{Type: ev.Type, Data: ev.Data})
+				targets = append(targets, s.Client)
 			}
 		}
-		for _, c := range r.Spectators {
-			c.sendMsg(Message{Type: ev.Type, Data: ev.Data})
-		}
+		targets = append(targets, r.Spectators...)
 	default:
 		if ev.Target >= 0 && ev.Target < len(r.Seats) && r.Seats[ev.Target].occupied() {
-			r.Seats[ev.Target].Client.sendMsg(Message{Type: ev.Type, Data: ev.Data})
+			targets = append(targets, r.Seats[ev.Target].Client)
 		}
+	}
+	r.mu.Unlock()
+	for _, c := range targets {
+		c.sendMsg(Message{Type: ev.Type, Data: ev.Data})
 	}
 }
 
 // broadcastState 向房间所有人发送裁剪后的房间状态；对在座且对局中的玩家补发自己的手牌
 func (r *Room) broadcastState() {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	// 懒清理：释放已超时的掉线座位
-	r.cleanupOfflineSeatsLocked()
+	// 懒清理：释放已超时的掉线座位（返回待发送项，避免 broadcast 重入死锁）
+	pendingMsgs, pendingEvs := r.cleanupOfflineSeatsLocked()
 	// 旁观者与在座玩家都收到公开状态
 	for _, s := range r.Seats {
 		if !s.occupied() {
@@ -176,6 +182,12 @@ func (r *Room) broadcastState() {
 	for _, c := range r.Spectators {
 		c.sendMsg(Message{Type: "roomState", Data: r.viewFor(c)})
 	}
+	r.mu.Unlock()
+	// 解锁后发送清理产生的系统消息与事件（broadcast 需获取 r.mu）
+	for _, m := range pendingMsgs {
+		r.systemChat(m)
+	}
+	r.emitEvents(pendingEvs)
 }
 
 // viewFor 构建给指定客户端的视角（绝不包含他人手牌）
@@ -291,17 +303,19 @@ func (r *Room) handleDisconnect(c *Client) {
 	}
 }
 
-// cleanupOfflineSeatsLocked 释放已超时的掉线座位（懒清理，调用方需持有 r.mu）
-func (r *Room) cleanupOfflineSeatsLocked() {
+// cleanupOfflineSeatsLocked 释放已超时的掉线座位（懒清理，调用方需持有 r.mu）。
+// 返回待发送的系统消息与事件——调用方必须在解锁后发送，
+// 否则 broadcast 会尝试重入 r.mu 导致死锁。
+func (r *Room) cleanupOfflineSeatsLocked() (pendingMsgs []string, pendingEvs []Event) {
 	for _, s := range r.Seats {
 		if s.isOffline() && time.Since(s.DisconnectedAt) > offlineTimeout {
 			name := s.Name
 			seatIdx := s.Index
 			r.standLocked(seatIdx)
-			r.systemChat(name + " 掉线超时，座位已释放")
+			pendingMsgs = append(pendingMsgs, name+" 掉线超时，座位已释放")
 			// 对局中腾空座位：通知引擎推进回合或结算
 			if r.Phase == "playing" {
-				r.emitEvents(r.Engine.OnSeatVacated(r, seatIdx))
+				pendingEvs = append(pendingEvs, r.Engine.OnSeatVacated(r, seatIdx)...)
 			}
 			// 对局可能因腾空而结束：确保房主有效
 			if r.Phase == "settled" {
@@ -309,6 +323,7 @@ func (r *Room) cleanupOfflineSeatsLocked() {
 			}
 		}
 	}
+	return
 }
 
 // handleLeave 主动离开：永久移除（不等同于掉线，不保留座位）

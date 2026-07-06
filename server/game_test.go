@@ -1016,3 +1016,50 @@ func TestHubRegisterLockedCollision(t *testing.T) {
 		t.Errorf("第二个 client 应在新 ID 下注册, got %v", got)
 	}
 }
+
+// 验证 broadcast 与 standLocked/handleSit 并发不产生数据竞争。
+// 修复前 broadcast 无锁读取 r.Seats[i].Client 和 r.Spectators，
+// 与 standLocked 修改 s.Client、handleSit append Spectators 竞争。
+// 此测试在 -race 下运行才能捕获竞争。
+func TestBroadcastConcurrentNoRace(t *testing.T) {
+	r := &Room{
+		Code:   "RACE",
+		Game:   "zjh",
+		HostID: "H0",
+		Phase:  "waiting",
+		Engine: &zjhEngine{},
+		Seats: []*Seat{
+			{Index: 0, PlayerID: "H0", Name: "H0", Chips: 1000, Client: &Client{playerID: "H0", send: make(chan []byte, 8)}},
+			{Index: 1, PlayerID: "", Chips: 1000, Client: nil},
+		},
+		Spectators: []*Client{},
+	}
+	done := make(chan struct{})
+	// 并发 stand/occupy 座位 1
+	go func() {
+		defer close(done)
+		for i := 0; i < 200; i++ {
+			r.mu.Lock()
+			s := r.Seats[1]
+			if s.Client == nil {
+				s.Client = &Client{playerID: "P1", send: make(chan []byte, 8)}
+				s.PlayerID = "P1"
+				s.Name = "P1"
+				r.Spectators = append(r.Spectators, s.Client)
+			} else {
+				// 模拟 standLocked 的关键字段重置
+				s.Client = nil
+				s.PlayerID = ""
+				s.Name = ""
+				r.Spectators = r.Spectators[:0]
+			}
+			r.mu.Unlock()
+		}
+	}()
+	// 并发广播
+	for i := 0; i < 200; i++ {
+		r.broadcast(Event{Type: "chat", Data: ActionData{"text": "hi"}, Target: -1})
+	}
+	<-done
+}
+
