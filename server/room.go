@@ -771,6 +771,13 @@ func (r *Room) handleStart(c *Client, data ActionData) {
 	} else {
 		r.BlindMode = false
 	}
+	// 开局前释放上一局遗留的掉线座位（避免新对局开始后掉线玩家重连拿到旧手牌）
+	// 掉线座位 Client==nil 但 PlayerID 仍存在，若不释放会带着上一局的旧手牌进入新对局
+	for _, s := range r.Seats {
+		if s.isOffline() {
+			r.standLocked(s.Index)
+		}
+	}
 	// 重置座位对局状态
 	for _, s := range r.Seats {
 		if !s.occupied() {

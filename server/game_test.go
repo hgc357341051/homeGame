@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"math/rand"
 	"testing"
 	"time"
 )
@@ -601,5 +602,40 @@ func TestHostDisconnectAsSpectatorTransfersHost(t *testing.T) {
 			t.Error("断线的旁观房主应已从旁观者列表移除")
 			break
 		}
+	}
+}
+
+// 验证开局时释放上一局遗留的掉线座位（避免重连拿到旧手牌）
+func TestStartReleasesOfflineSeatsWithStaleHand(t *testing.T) {
+	hostClient := &Client{playerID: "HOST", name: "房主", send: make(chan []byte, 8)}
+	p1Client := &Client{playerID: "P1", name: "玩家1", send: make(chan []byte, 8)}
+	// P2 已掉线但座位保留中（上一局的旧手牌仍在）
+	staleHand := []Card{tc("♠", "A", 14), tc("♥", "K", 13), tc("♦", "Q", 12)}
+	r := &Room{
+		Code:   "TEST",
+		Game:   "zjh",
+		HostID: "HOST",
+		Phase:  "settled",
+		Engine: &zjhEngine{},
+		rnd:    rand.New(rand.NewSource(1)),
+		Seats: []*Seat{
+			{Index: 0, PlayerID: "HOST", Name: "房主", Chips: 1000, Client: hostClient, Ready: true},
+			{Index: 1, PlayerID: "P1", Name: "玩家1", Chips: 1000, Client: p1Client, Ready: true},
+			{Index: 2, PlayerID: "P2", Name: "玩家2", Chips: 800, Client: nil, DisconnectedAt: time.Now(), Hand: staleHand, IsFolded: true},
+		},
+	}
+	hostClient.room = r
+	p1Client.room = r
+	// 房主开局
+	r.handleStart(hostClient, ActionData{})
+	if r.Phase != "playing" {
+		t.Fatalf("应进入 playing, got %s", r.Phase)
+	}
+	// P2 的掉线座位应已释放：PlayerID 清空、手牌清空
+	if r.Seats[2].PlayerID != "" {
+		t.Errorf("掉线座位应已释放, got PlayerID=%s", r.Seats[2].PlayerID)
+	}
+	if len(r.Seats[2].Hand) != 0 {
+		t.Errorf("掉线座位的旧手牌应已清空, got %d 张", len(r.Seats[2].Hand))
 	}
 }
