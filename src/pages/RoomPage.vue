@@ -140,6 +140,22 @@ function copyCode() {
       copied.value = true
       setTimeout(() => (copied.value = false), 1500)
     })
+  } else {
+    // 非 HTTPS 环境（如局域网 IP 访问）的兜底方案
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.style.position = 'fixed'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.select()
+    try {
+      document.execCommand('copy')
+      copied.value = true
+      setTimeout(() => (copied.value = false), 1500)
+    } catch {
+      /* 忽略 */
+    }
+    document.body.removeChild(ta)
   }
 }
 
