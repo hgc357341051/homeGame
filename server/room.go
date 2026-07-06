@@ -731,6 +731,12 @@ func (r *Room) handleRename(c *Client, data ActionData) {
 		c.emitError("目标座位无效")
 		return
 	}
+	// 权限：仅允许改自己的昵称，或房主改任意座位
+	if c.playerID != r.Seats[seatNum].PlayerID && c.playerID != r.HostID {
+		r.mu.Unlock()
+		c.emitError("只能修改自己的昵称")
+		return
+	}
 	oldName := r.Seats[seatNum].Name
 	r.Seats[seatNum].Name = newName
 	// 同步更新 Client.name 以便后续聊天/断线消息使用

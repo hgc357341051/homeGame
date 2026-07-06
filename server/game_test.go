@@ -605,6 +605,43 @@ func TestHostDisconnectAsSpectatorTransfersHost(t *testing.T) {
 	}
 }
 
+// 验证 rename 权限：仅允许改自己或房主改任意座位
+func TestRenamePermission(t *testing.T) {
+	hostClient := &Client{playerID: "HOST", name: "房主", send: make(chan []byte, 8)}
+	p1Client := &Client{playerID: "P1", name: "玩家1", send: make(chan []byte, 8)}
+	r := &Room{
+		Code:   "TEST",
+		Game:   "zjh",
+		HostID: "HOST",
+		Phase:  "waiting",
+		Engine: &zjhEngine{},
+		Seats: []*Seat{
+			{Index: 0, PlayerID: "HOST", Name: "房主", Chips: 1000, Client: hostClient},
+			{Index: 1, PlayerID: "P1", Name: "玩家1", Chips: 1000, Client: p1Client},
+		},
+	}
+	hostClient.room = r
+	p1Client.room = r
+
+	// P1 改自己的昵称：应成功
+	r.handleRename(p1Client, ActionData{"seat": float64(1), "name": "新名字"})
+	if r.Seats[1].Name != "新名字" {
+		t.Errorf("改自己昵称应成功, got %s", r.Seats[1].Name)
+	}
+
+	// P1 改房主的昵称：应被拒
+	r.handleRename(p1Client, ActionData{"seat": float64(0), "name": "被改了"})
+	if r.Seats[0].Name != "房主" {
+		t.Errorf("非房主不应能改他人昵称, got %s", r.Seats[0].Name)
+	}
+
+	// 房主改 P1 的昵称：应成功（房主权限）
+	r.handleRename(hostClient, ActionData{"seat": float64(1), "name": "房主改的"})
+	if r.Seats[1].Name != "房主改的" {
+		t.Errorf("房主应能改任意座位昵称, got %s", r.Seats[1].Name)
+	}
+}
+
 // 验证重连后补发手牌（掉线期间手牌保留在 Seat.Hand，重连需重新发送 deal）
 func TestReclaimResendsHand(t *testing.T) {
 	oldClient := &Client{playerID: "P1", name: "玩家1", send: make(chan []byte, 8)}
