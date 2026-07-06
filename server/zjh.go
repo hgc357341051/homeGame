@@ -538,3 +538,12 @@ func (e *zjhEngine) PublicArea(r *Room) PublicAreaView {
 	v.LookedCount = looked
 	return v
 }
+
+// ResendTurn 重连后补发当前轮次信息
+func (e *zjhEngine) ResendTurn(r *Room, c *Client) {
+	if e.phase != "betting" {
+		return
+	}
+	ev := e.turnEvent(r)
+	c.sendMsg(Message{Type: ev.Type, Data: ev.Data})
+}

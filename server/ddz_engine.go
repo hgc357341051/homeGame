@@ -343,6 +343,15 @@ func (e *ddzEngine) PublicArea(r *Room) PublicAreaView {
 	return v
 }
 
+// ResendTurn 重连后补发当前轮次信息
+func (e *ddzEngine) ResendTurn(r *Room, c *Client) {
+	if e.phase != "callLandlord" && e.phase != "playing" {
+		return
+	}
+	ev := e.turnEvent(r)
+	c.sendMsg(Message{Type: ev.Type, Data: ev.Data})
+}
+
 // extractCards 从前端传来的 []interface{} 解析出 Card 列表
 func extractCards(raw []interface{}) []Card {
 	out := make([]Card, 0, len(raw))

@@ -117,6 +117,10 @@ watch(
       revealTimer = setTimeout(() => {
         revealVisible.value = false
       }, 3200)
+    } else {
+      // store.reveal 被清除时立即隐藏浮层
+      revealVisible.value = false
+      if (revealTimer) clearTimeout(revealTimer)
     }
   },
 )

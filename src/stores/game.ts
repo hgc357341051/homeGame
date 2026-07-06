@@ -243,6 +243,11 @@ export const useGameStore = defineStore('game', () => {
         turn.value = d
         break
       case 'phase':
+        // 新对局开始（phase 变为非 settled）时清除上一局的结算/亮牌浮层
+        if (d.phase && d.phase !== 'settled') {
+          settle.value = null
+          reveal.value = null
+        }
         if (d.message) {
           phaseMsg.value = d.message
           pushLog(d.message, d.phase || 'info')

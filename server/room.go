@@ -67,6 +67,8 @@ type GameEngine interface {
 	PlayerHand(s *Seat) []Card
 	// OnSeatVacated 当座位被腾空（踢人/超时）时调用，引擎推进回合或结算
 	OnSeatVacated(r *Room, seat int) []Event
+	// ResendTurn 重发当前轮次信息给重连的玩家（调用方需持有 r.mu）
+	ResendTurn(r *Room, c *Client)
 }
 
 // Room 一个游戏房间
@@ -618,6 +620,8 @@ func (r *Room) handleSit(c *Client, data ActionData) {
 		if r.BlindMode && s.LookedIndices != nil {
 			inheritLooked = append([]bool{}, s.LookedIndices...)
 		}
+		// 继承掉线座位：补发当前轮次信息（与 tryReclaim 保持一致）
+		r.Engine.ResendTurn(r, c)
 	}
 	r.mu.Unlock()
 	if inheritHand {
@@ -790,6 +794,8 @@ func (r *Room) tryReclaim(c *Client) bool {
 			// 掉线座位夺回
 			s.Client = c
 			s.DisconnectedAt = time.Time{}
+			// 重连后补发当前轮次信息，使玩家能立即看到可用操作
+			r.Engine.ResendTurn(r, c)
 			return true
 		}
 		if s.Client != c {
@@ -797,6 +803,7 @@ func (r *Room) tryReclaim(c *Client) bool {
 			// 旧连接的 readPump 终止时会触发 unregister→handleDisconnect，但找不到该 client 已不处理
 			s.Client = c
 			s.DisconnectedAt = time.Time{}
+			r.Engine.ResendTurn(r, c)
 			return true
 		}
 	}

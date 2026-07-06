@@ -758,3 +758,25 @@ func (e *nnEngine) PublicArea(r *Room) PublicAreaView {
 	}
 	return v
 }
+
+// ResendTurn 重连后补发当前轮次信息
+func (e *nnEngine) ResendTurn(r *Room, c *Client) {
+	if e.phase == "betting" {
+		ev := e.turnEvent(r)
+		c.sendMsg(Message{Type: ev.Type, Data: ev.Data})
+		return
+	}
+	if e.phase == "setNiu" {
+		// 凑牛阶段：若该玩家未弃牌且未确认凑牛，补发 turn
+		seat := r.findSeat(c.playerID)
+		if seat < 0 || r.Seats[seat].IsFolded {
+			return
+		}
+		if _, done := e.results[seat]; done {
+			return
+		}
+		c.sendMsg(Message{Type: "turn", Data: ActionData{
+			"seat": seat, "phase": "setNiu", "actions": []string{"niuniuSet"},
+		}})
+	}
+}

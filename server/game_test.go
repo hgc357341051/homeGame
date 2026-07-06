@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -349,5 +350,96 @@ func TestHandleLeaveHostTransferDuringPlaying(t *testing.T) {
 	}
 	if r.HostID != "P1" {
 		t.Errorf("房主应转移给 P1, got HostID=%s", r.HostID)
+	}
+}
+
+// recvMsg 从客户端 send channel 读取一条消息；无消息时返回 nil
+func recvMsg(ch chan []byte) *Message {
+	select {
+	case b := <-ch:
+		var msg Message
+		if err := json.Unmarshal(b, &msg); err != nil {
+			return nil
+		}
+		return &msg
+	default:
+		return nil
+	}
+}
+
+func TestZJHResendTurn(t *testing.T) {
+	// 重连玩家在 betting 阶段应收到 turn 事件
+	client := &Client{playerID: "P1", name: "玩家1", send: make(chan []byte, 8)}
+	r := &Room{
+		Code:   "TEST",
+		Game:   "zjh",
+		HostID: "P1",
+		Phase:  "playing",
+		Engine: &zjhEngine{},
+		Seats: []*Seat{
+			{Index: 0, PlayerID: "P1", Name: "玩家1", Chips: 1000, Client: client},
+			{Index: 1, PlayerID: "P2", Name: "玩家2", Chips: 1000, Client: &Client{playerID: "P2"}},
+		},
+	}
+	client.room = r
+	e := r.Engine.(*zjhEngine)
+	e.occupied = []int{0, 1}
+	e.phase = "betting"
+	e.currentSeat = 0 // P1 的回合
+	e.baseBet = 2
+	e.currentBet = 2
+	e.activeCount = 2
+	r.Seats[0].CurrentBet = 2
+	r.Seats[1].CurrentBet = 2
+
+	r.Engine.ResendTurn(r, client)
+	msg := recvMsg(client.send)
+	if msg == nil {
+		t.Fatal("ResendTurn 应发送 turn 消息，但未收到")
+	}
+	if msg.Type != "turn" {
+		t.Errorf("应收到 turn 事件, got %s", msg.Type)
+	}
+
+	// 非 betting 阶段不应发送
+	e.phase = "settled"
+	r.Engine.ResendTurn(r, client)
+	if msg := recvMsg(client.send); msg != nil {
+		t.Errorf("settled 阶段不应发送消息, got %v", msg.Type)
+	}
+}
+
+func TestNNResendTurnSetNiu(t *testing.T) {
+	// 凑牛阶段：未确认凑牛的玩家重连应收到 turn 事件
+	client := &Client{playerID: "P1", name: "玩家1", send: make(chan []byte, 8)}
+	r := &Room{
+		Code:   "TEST",
+		Game:   "nn",
+		HostID: "P1",
+		Phase:  "playing",
+		Engine: &nnEngine{},
+		Seats: []*Seat{
+			{Index: 0, PlayerID: "P1", Name: "玩家1", Chips: 1000, Client: client, Hand: []Card{tc("♠", "A", 1), tc("♥", "5", 5), tc("♦", "5", 5), tc("♣", "J", 10), tc("♠", "K", 10)}},
+		},
+	}
+	client.room = r
+	e := r.Engine.(*nnEngine)
+	e.phase = "setNiu"
+	e.results = map[int]nnResult{} // P1 未确认
+
+	r.Engine.ResendTurn(r, client)
+	msg := recvMsg(client.send)
+	if msg == nil {
+		t.Fatal("setNiu 阶段未确认的玩家应收到 turn 消息")
+	}
+	if msg.Type != "turn" {
+		t.Errorf("应收到 turn 事件, got %s", msg.Type)
+	}
+
+	// 已确认凑牛的玩家不应再收到
+	e.results[0] = nnResult{}
+	r.Engine.ResendTurn(r, client)
+	if msg := recvMsg(client.send); msg != nil {
+		t.Errorf("已确认凑牛的玩家不应再收到 turn, got %v", msg.Type)
 	}
 }
